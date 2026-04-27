@@ -5,13 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>COMP 4531 IoT Lab</title>
-
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.plot.ly/plotly-2.35.0.min.js" defer></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-
     <link rel="stylesheet" href="style.css">
 </head>
 
@@ -27,16 +21,14 @@
                 <div class="logo-icon">COMP 4531</div>
                 <span>IoT and Smart Sensing</span>
             </div>
-
             <nav class="segmented-control">
                 <button class="nav-btn active" onclick="setTab('home')">Connect</button>
-                <button class="nav-btn" onclick="setTab('imu')">IMU Lab</button>
                 <button class="nav-btn" onclick="setTab('lora')">LoRa</button>
                 <button class="nav-btn" onclick="setTab('mesh')">Mesh</button>
-                <button class="nav-btn" onclick="setTab('audio')">Audio</button>
             </nav>
         </header>
 
+        <!-- ══ CONNECT ══════════════════════════════════════════════════════ -->
         <section id="view-home" class="view-section active">
             <div class="card center-card">
                 <h2>Connection Setup</h2>
@@ -63,194 +55,48 @@
             </div>
         </section>
 
-        <section id="view-imu" class="view-section">
-            <aside class="glass-sidebar">
-                <div class="sidebar-header">
-                    <div class="sub-nav">
-                        <button class="sub-btn active" onclick="setImuMode('3d')">3D View</button>
-                        <button class="sub-btn" onclick="setImuMode('steps')">Fitness</button>
-                        <button class="sub-btn" onclick="setImuMode('game')">Game</button>
-                    </div>
-                </div>
-
-                <div class="stats-container">
-                    <div class="stat-item">
-                        <span class="label">Signal Strength</span>
-                        <span class="value" id="rssi">- dBm</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="label">Data Rate</span>
-                        <span class="value" id="pps">0 PPS</span>
-                    </div>
-                    <div class="stat-item highlight">
-                        <span class="label">Steps</span>
-                        <span class="value" id="stepSide">0</span>
-                    </div>
-                </div>
-
-                <div class="sensor-data">
-                    <div class="sensor-row">
-                        <span class="sensor-label">ACCEL</span>
-                        <span class="sensor-val" id="accVal">0.00, 0.00, 0.00</span>
-                    </div>
-                    <div class="sensor-row">
-                        <span class="sensor-label">GYRO</span>
-                        <span class="sensor-val" id="gyroVal">0.00, 0.00, 0.00</span>
-                    </div>
-                </div>
-
-                <div class="orientation-data" id="orientationData">
-                    <div class="orient-row">
-                        <span class="orient-label">Pitch</span>
-                        <span class="orient-val" id="oriPitch">0.0&deg;</span>
-                    </div>
-                    <div class="orient-row">
-                        <span class="orient-label">Roll</span>
-                        <span class="orient-val" id="oriRoll">0.0&deg;</span>
-                    </div>
-                    <div class="orient-row">
-                        <span class="orient-label">Yaw</span>
-                        <span class="orient-val" id="oriYaw">0.0&deg;</span>
-                    </div>
-                </div>
-
-                <div class="control-actions">
-                    <button id="startBtn" class="btn-secondary small" onclick="toggleStream()">Start Stream</button>
-                    <button class="btn-secondary small" onclick="send('STOP'); resetStreamBtn();">Stop</button>
-                    <button class="btn-secondary small btn-recalibrate" onclick="recalibrate()">Recal</button>
-                </div>
-                <div id="csvDownloadRow" class="csv-download-row" style="display:none;">
-                    <span id="csvFileName" class="csv-filename"></span>
-                    <button class="btn-csv-dl" onclick="downloadCSV()" title="Download CSV">
-                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
-                        </svg>
-                    </button>
-                </div>
-
-                <div class="toggle-row">
-                    <label class="ios-switch">
-                        <input type="checkbox" id="smoothCheck" checked>
-                        <span class="slider"></span>
-                    </label>
-                    <span>Smooth Motion</span>
-                </div>
-            </aside>
-
-            <main class="imu-main">
-                <div id="imu-content"></div>
-
-                <div id="graph-layer">
-                    <div class="graph-card">
-                        <div class="graph-header">
-                            <span>Accelerometer</span>
-                            <div class="legend">
-                                <span class="dot x"></span>X
-                                <span class="dot y"></span>Y
-                                <span class="dot z"></span>Z
-                            </div>
-                        </div>
-                        <canvas id="accCanvas"></canvas>
-                    </div>
-                    <div class="graph-card">
-                        <div class="graph-header">
-                            <span>Gyroscope</span>
-                        </div>
-                        <canvas id="gyroCanvas"></canvas>
-                    </div>
-                </div>
-
-                <div id="pedometer-view">
-                    <div class="ring-container">
-                        <svg class="progress-ring" width="260" height="260">
-                            <circle class="ring-bg" stroke-width="20" r="110" cx="130" cy="130" />
-                            <circle class="ring-val" stroke-width="20" r="110" cx="130" cy="130" />
-                        </svg>
-                        <div class="ring-content">
-                            <span class="step-big" id="stepBig">0</span>
-                            <span class="step-label">STEPS</span>
-                        </div>
-                    </div>
-                    <div class="pedometer-meta">Live Sensor Data</div>
-                    <label class="step-source-toggle">
-                        <input type="checkbox" id="useDeviceStep">
-                        <span>Use device pedometer (BLE)</span>
-                    </label>
-                    <div class="step-char-label">When unchecked, steps are estimated locally from IMU.</div>
-                </div>
-
-                <div id="game-view">
-                    <canvas id="fbCanvas"></canvas>
-                    <div id="fbStatus">
-                        <div class="fb-status-row"><span class="fb-lbl">Mode:</span><span class="fb-val" id="fbModeVal">Simple</span></div>
-                        <div class="fb-status-row"><span class="fb-lbl">Pitch:</span><span class="fb-val" id="fbPitchVal">0.0&deg;</span></div>
-                        <div class="fb-status-row"><span class="fb-lbl">Swing:</span><span class="fb-val" id="fbSwingVal">0.0&deg;</span></div>
-                        <button id="fbModeBtn" class="fb-mode-btn">Pro Mode</button>
-                    </div>
-                    <div id="fbScore">0</div>
-                    <div id="fbSwingBar">
-                        <div class="fb-bar-track"><div class="fb-bar-fill" id="fbBarFill"></div></div>
-                    </div>
-                    <div id="fbOverlay">
-                        <div class="fb-overlay-title" id="fbOverlayTitle">IMU Flappy Bird</div>
-                        <div class="fb-overlay-score" id="fbOverlayScore"></div>
-                        <div class="fb-overlay-hint">Swing your sensor downward to flap!</div>
-                        <div class="fb-overlay-hint" style="opacity:0.5">Or press Space / Arrow Up</div>
-                        <button class="fb-start-btn" id="fbStartBtn">Start Game</button>
-                    </div>
-                </div>
-            </main>
-        </section>
-
+        <!-- ══ LORA ══════════════════════════════════════════════════════════ -->
         <section id="view-lora" class="view-section">
             <div class="card chat-card">
                 <div class="card-header">
                     <h3>LoRa Messenger</h3>
                     <span id="loraBadge" class="badge">--- MHz</span>
                 </div>
-                
-                <div class="lora-controls" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 15px; background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.1);">
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <label class="ios-switch">
-                            <input type="checkbox" id="bleScanToggle" checked>
-                            <span class="slider"></span>
-                        </label>
-                        <span style="font-size: 0.85rem; color: var(--text-secondary); font-weight: 500;">Link BLE Scan</span>
-                    </div>
+
+                <div class="lora-controls">
                     <button class="btn-secondary small" onclick="downloadLoraCSV()">Download CSV</button>
                 </div>
 
-                <div id="loraGraphPanel" style="display: none; padding: 16px; border-bottom: 1px solid rgba(0,0,0,0.06); background: rgba(245,245,247,0.4);">
-                    <div class="graph-card" style="box-shadow: none; border: 1px solid rgba(0,0,0,0.1);">
+                <div id="loraGraphPanel" style="display:none; padding:16px; border-bottom:1px solid rgba(0,0,0,0.06); background:rgba(245,245,247,0.4);">
+                    <div class="graph-card" style="box-shadow:none; border:1px solid rgba(0,0,0,0.1);">
                         <div class="graph-header">
                             <span>Signal Strength vs Distance</span>
                             <div class="legend">
                                 <span class="dot" style="background:var(--primary)"></span>LoRa
-                                <span class="dot" style="background:var(--success)"></span>BLE
                             </div>
                         </div>
-                        <canvas id="loraChartCanvas" style="height: 140px; background: transparent;"></canvas>
+                        <canvas id="loraChartCanvas" style="height:140px; background:transparent;"></canvas>
                     </div>
                 </div>
 
                 <div id="loraChat" class="chat-area">
-                    <div class="chat-placeholder">No messages yet...</div>
+                    <div class="chat-placeholder">No messages yet…</div>
                 </div>
                 <div class="chat-input-area">
-                    <input type="text" id="loraTxt" placeholder="Send '1 meter', '5m', etc. to plot...">
+                    <input type="text" id="loraTxt" placeholder="Send '1 meter', '5m', etc. to plot…">
                     <button class="btn-send" onclick="sendLoRa()">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="white">
-                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
                         </svg>
                     </button>
                 </div>
             </div>
         </section>
 
-        <!-- ══ MESH NETWORK TAB ══════════════════════════════════════════ -->
+        <!-- ══ MESH NETWORK ══════════════════════════════════════════════════ -->
         <section id="view-mesh" class="view-section">
             <aside class="glass-sidebar">
-                <h3 style="margin: 0 0 20px; font-size: 18px; letter-spacing: -0.02em;">Mesh Network</h3>
+                <h3 style="margin:0 0 20px; font-size:18px; letter-spacing:-0.02em;">Mesh Network</h3>
 
                 <div class="stats-container">
                     <div class="stat-item">
@@ -289,144 +135,6 @@
             </main>
         </section>
 
-        <section id="view-audio" class="view-section">
-            <aside class="glass-sidebar">
-                <div class="sidebar-header">
-                    <div class="sub-nav">
-                        <button class="sub-btn active" onclick="setAudioMode('record')">Voice Memo</button>
-                        <button class="sub-btn" onclick="setAudioMode('doppler')">Board Doppler</button>
-                        <button class="sub-btn" onclick="setAudioMode('laptop')">Laptop Doppler</button>
-                    </div>
-                </div>
-
-                <div class="stats-container" id="dopplerStats" style="display:none;">
-                    <div class="stat-item">
-                        <span class="label">Frequency Shift</span>
-                        <span class="value" id="dopplerShift">0.0 Hz</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="label">Peak Freq</span>
-                        <span class="value" id="peakFreq">5000.0 Hz</span>
-                    </div>
-                </div>
-
-                <div class="stats-container" id="laptopStats" style="display:none;">
-                    <div class="stat-item">
-                        <span class="label">Velocity</span>
-                        <span class="value" id="ldVelSide">0.00 m/s</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="label">Freq Shift</span>
-                        <span class="value" id="ldFreqSide">0.0 Hz</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="label">Signal</span>
-                        <span class="value" id="ldStrSide">-100 dB</span>
-                    </div>
-                </div>
-            </aside>
-
-            <div id="audio-record-view" class="card center-card audio-card">
-                <div class="waveform-icon">
-                    <span></span><span></span><span></span><span></span><span></span>
-                </div>
-                <h3>Voice Memo</h3>
-                <p>Record 5 seconds of raw audio from the IoT board.</p>
-
-                <canvas id="audioCanvas"></canvas>
-                <div id="audioStatus" class="status-pill">Ready to Record</div>
-
-                <button id="recBtn" class="btn-record" onclick="recordAudio()">
-                    <div class="inner-circle"></div>
-                </button>
-            </div>
-
-            <div id="audio-doppler-view" class="card center-card audio-card" style="display:none;">
-                <div class="waveform-icon">
-                    <span></span><span></span><span></span><span></span><span></span>
-                </div>
-                <h3>Board Doppler</h3>
-                <p>Real-time frequency shift via IoT board mic (5 kHz reference, data over BLE).</p>
-
-                <canvas id="dopplerCanvas" style="margin: 20px 0; height: 200px;"></canvas>
-                <div id="dopplerStatus" class="status-pill">Ready</div>
-
-                <div class="control-actions" style="margin-top: 20px;">
-                    <button id="dopplerStartBtn" class="btn-primary small" onclick="startDoppler()">Start</button>
-                    <button id="dopplerStopBtn" class="btn-secondary small" onclick="stopDoppler()" disabled>Stop</button>
-                </div>
-            </div>
-
-            <div id="audio-laptop-view" class="card center-card audio-card" style="display:none; max-width:none; width:100%;">
-                <div class="waveform-icon">
-                    <span></span><span></span><span></span><span></span><span></span>
-                </div>
-                <h3>Laptop Doppler</h3>
-                <p>Velocity measurement using your laptop mic (Web Audio API). Play a tone on your phone and move it toward / away.</p>
-
-                <div class="ld-config-row" style="display:flex; gap:12px; margin:16px 0; justify-content:center; flex-wrap:wrap;">
-                    <div class="input-group" style="flex:0 1 160px; min-width:120px;">
-                        <label>Center Freq (Hz)</label>
-                        <input type="number" id="ldCenterFreq" value="18000" min="1000" max="22000" step="100">
-                    </div>
-                    <div class="input-group" style="flex:0 1 130px; min-width:100px;">
-                        <label>FFT Size</label>
-                        <input type="number" id="ldFftSize" value="8192" min="2048" max="16384" step="2048">
-                    </div>
-                </div>
-
-                <div style="text-align:center; padding:12px 0;">
-                    <div style="font-size:13px; color:#888; margin-bottom:2px;">Current Velocity</div>
-                    <span id="ldVelDisplay" style="font-size:56px; font-weight:bold;">0.00</span>
-                    <span style="font-size:20px; color:#888; margin-left:4px;">m/s</span>
-                    <div style="display:flex; justify-content:center; gap:24px; margin-top:8px; font-size:13px; color:#888; flex-wrap:wrap;">
-                        <span>Shift: <strong id="ldFreqDisplay" style="color:#007aff;">0.0 Hz</strong></span>
-                        <span>Signal: <strong id="ldStrDisplay" style="color:#ff3b30;">-100 dB</strong></span>
-                    </div>
-                </div>
-
-                <div id="ldVelocityGraph" style="width:100%; height:280px;"></div>
-                <div id="ldSpectrumGraph" style="width:100%; height:220px;"></div>
-
-                <div id="ldStatus" class="status-pill">Stopped</div>
-
-                <div class="control-actions" style="margin-top: 16px;">
-                    <button id="ldStartBtn" class="btn-primary small" onclick="ldStart()">Start</button>
-                    <button id="ldStopBtn" class="btn-secondary small" onclick="ldStop()" disabled>Stop</button>
-                    <button id="ldRecordBtn" class="btn-secondary small" onclick="ldToggleRecording()">Record</button>
-                    <button id="ldSaveBtn" class="btn-secondary small" onclick="ldSaveRecording()">Save</button>
-                </div>
-            </div>
-        </section>
-
-    </div>
-
-    <div id="calibDialog" class="calib-overlay" style="display:none;">
-        <div class="calib-card">
-            <h3>Calibration Required</h3>
-            <p class="calib-desc">Place the board on a flat surface with the <strong>USB-C port facing toward you</strong>, then press Start.</p>
-
-            <div class="calib-diagram">
-                <div class="calib-board">
-                    <img src="xiaonrf52840sence.png" alt="XIAO nRF52840" class="calib-board-img">
-                    <div class="calib-arrow">
-                        <svg viewBox="0 0 24 40" width="24" height="40">
-                            <path d="M12 0 L12 32 M4 24 L12 34 L20 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                        <span>USB-C Toward You</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="calib-reason">
-                <strong>Why?</strong> This 6-axis IMU (accelerometer + gyroscope) can detect pitch &amp; roll from gravity, but has <strong>no magnetometer</strong> to determine absolute heading. The initial yaw (heading = 0&deg;) is set by your physical placement at start time.
-            </div>
-
-            <div class="calib-actions">
-                <button class="btn-primary calib-go" id="calibStartBtn">Start Streaming</button>
-                <button class="btn-secondary calib-cancel" onclick="closeCalibDialog()">Cancel</button>
-            </div>
-        </div>
     </div>
 
     <script src="script.js"></script>
