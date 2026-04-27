@@ -13,11 +13,11 @@ import board
 from sx1262 import SX1262
 
 # ── Identity ──────────────────────────────────────────────────────────────────
-GROUP_ID = 0      # ← change per board (must be unique across all nodes)
-NODE_ID  = GROUP_ID
+NODE_ID   = 2     # ← unique per physical board within the mesh (e.g. 1, 2, 3…)
 
 # ── LoRa Parameters ───────────────────────────────────────────────────────────
-MY_FREQ     = 900.0 + (GROUP_ID - 1) * 1.0
+# MESH_FREQ must be identical on every node in the network.
+MESH_FREQ   = 912.0   # MHz — must match code_nrf.py exactly
 BW          = 125.0
 SF          = 7       # Must match all other mesh nodes
 CR          = 5
@@ -47,10 +47,10 @@ rf_sw.value = False                           # RX mode
 spi  = busio.SPI(sck_pin, mosi_pin, miso_pin)
 lora = SX1262(spi, sck_pin, mosi_pin, miso_pin,
               nss_pin, dio1_pin, rst_pin, busy_pin)
-lora.begin(freq=MY_FREQ, bw=BW, sf=SF, cr=CR,
+lora.begin(freq=MESH_FREQ, bw=BW, sf=SF, cr=CR,
            useRegulatorLDO=True, tcxoVoltage=1.8)
 
-print(f"Node {NODE_ID}  {MY_FREQ} MHz  SF{SF}  TTL={TTL_DEFAULT}")
+print(f"Node {NODE_ID}  {MESH_FREQ} MHz  SF{SF}  TTL={TTL_DEFAULT}")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def already_seen(src, mid):

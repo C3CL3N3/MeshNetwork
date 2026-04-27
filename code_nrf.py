@@ -17,13 +17,14 @@ from adafruit_ble.characteristics import Characteristic
 from sx1262 import SX1262
 
 # ── Identity ──────────────────────────────────────────────────────────────────
-GROUP_ID = 0      # ← change per board (1–30); sets BLE name and LoRa freq
-NODE_ID  = GROUP_ID
+GROUP_ID  = 13    # Lab group → sets BLE UUID and device name (1–30)
+NODE_ID   = 1     # ← unique per physical board within the mesh (e.g. 1, 2, 3…)
 
 # ── LoRa Parameters ───────────────────────────────────────────────────────────
-MY_FREQ     = 900.0 + (GROUP_ID - 1) * 1.0   # MHz, unique per group
+# MESH_FREQ must be identical on every node — it is NOT derived from GROUP_ID.
+MESH_FREQ   = 912.0   # MHz — shared mesh channel; change all boards together
 BW          = 125.0   # kHz
-SF          = 7       # Spreading Factor — all mesh nodes must use the same value
+SF          = 7       # Spreading Factor — must match on all nodes
 CR          = 5       # Coding rate 4/5
 TTL_DEFAULT = 5       # Maximum relay hops
 
@@ -56,10 +57,10 @@ try:
     spi  = busio.SPI(lora_sck, lora_mosi, lora_miso)
     lora = SX1262(spi, lora_sck, lora_mosi, lora_miso,
                   lora_nss, lora_dio1, lora_rst, lora_busy)
-    lora.begin(freq=MY_FREQ, bw=BW, sf=SF, cr=CR,
+    lora.begin(freq=MESH_FREQ, bw=BW, sf=SF, cr=CR,
                useRegulatorLDO=True, tcxoVoltage=1.6)
     lora_ok = True
-    print(f"LoRa OK  {MY_FREQ} MHz  SF{SF}  BW{BW}")
+    print(f"LoRa OK  {MESH_FREQ} MHz  SF{SF}  BW{BW}")
 except Exception as e:
     print(f"LoRa FAIL: {e}")
 
@@ -116,6 +117,7 @@ def decode_pkt(raw):
 def lora_tx(src, mid, ttl, payload):
     try:
         lora.send(encode_pkt(src, mid, ttl, payload))
+        print(f"TX src={src} mid={mid} ttl={ttl} '{payload}'")
     except Exception as e:
         print(f"TX err: {e}")
 
@@ -158,7 +160,7 @@ def lora_rx_and_relay():
         print(f"RX err: {e}")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-print(f"Node {NODE_ID}  {MY_FREQ} MHz  SF{SF}  TTL={TTL_DEFAULT}")
+print(f"Node {NODE_ID}  {MESH_FREQ} MHz  SF{SF}  TTL={TTL_DEFAULT}")
 blink(3)
 
 while True:
