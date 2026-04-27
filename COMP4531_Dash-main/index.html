@@ -32,6 +32,7 @@
                 <button class="nav-btn active" onclick="setTab('home')">Connect</button>
                 <button class="nav-btn" onclick="setTab('imu')">IMU Lab</button>
                 <button class="nav-btn" onclick="setTab('lora')">LoRa</button>
+                <button class="nav-btn" onclick="setTab('mesh')">Mesh</button>
                 <button class="nav-btn" onclick="setTab('audio')">Audio</button>
             </nav>
         </header>
@@ -244,6 +245,48 @@
                     </button>
                 </div>
             </div>
+        </section>
+
+        <!-- ══ MESH NETWORK TAB ══════════════════════════════════════════ -->
+        <section id="view-mesh" class="view-section">
+            <aside class="glass-sidebar">
+                <h3 style="margin: 0 0 20px; font-size: 18px; letter-spacing: -0.02em;">Mesh Network</h3>
+
+                <div class="stats-container">
+                    <div class="stat-item">
+                        <span class="label">My Node</span>
+                        <span class="value" id="meshMyNodeId">—</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="label">Frequency</span>
+                        <span class="value" id="meshFreq">— MHz</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="label">Nodes Seen</span>
+                        <span class="value" id="meshNodeCount">0</span>
+                    </div>
+                    <div class="stat-item highlight">
+                        <span class="label">Messages</span>
+                        <span class="value" id="meshMsgCount">0</span>
+                    </div>
+                </div>
+
+                <div class="mesh-send-row">
+                    <input type="text" id="meshMsgInput" placeholder="Broadcast message…"
+                           onkeydown="if(event.key==='Enter') sendMesh()">
+                    <button class="btn-primary small" onclick="sendMesh()">Send</button>
+                </div>
+
+                <div class="mesh-node-section">
+                    <div class="mesh-section-label">Discovered Nodes</div>
+                    <div id="meshNodeList"></div>
+                </div>
+            </aside>
+
+            <main class="mesh-main">
+                <canvas id="meshCanvas"></canvas>
+                <div id="meshLog"></div>
+            </main>
         </section>
 
         <section id="view-audio" class="view-section">

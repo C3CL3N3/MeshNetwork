@@ -1,26 +1,35 @@
 # SPDX-FileCopyrightText: 2026 Student Lab - COMP 4531 - HKUST
 # SPDX-License-Identifier: MIT
+#
+# LoRa Mesh Relay Node — XIAO ESP32-S3 + SX1262
+# Floods received packets (TTL decrement + dedup).
+# Originates a beacon every 30 s so other nodes know it exists.
 
+import time
 import busio
 import digitalio
 import microcontroller
 import board
-import time
 from sx1262 import SX1262
 
-# --- GROUP IDENTITY ---
-GROUP_ID = 0  # <--- STUDENTS CHANGE THIS (1 to 30)
+# ── Identity ──────────────────────────────────────────────────────────────────
+GROUP_ID = 0      # ← change per board (must be unique across all nodes)
+NODE_ID  = GROUP_ID
 
-# --- CONFIGURATION ---
-FREQ_BASE = 900.0
-FREQ_STEP = 1.0
-MY_FREQ = FREQ_BASE + (GROUP_ID - 1) * FREQ_STEP
+# ── LoRa Parameters ───────────────────────────────────────────────────────────
+MY_FREQ     = 900.0 + (GROUP_ID - 1) * 1.0
+BW          = 125.0
+SF          = 7       # Must match all other mesh nodes
+CR          = 5
+TTL_DEFAULT = 5
 
-BW = 125.0
-SF = 7      # Must match the transmitter's SF
-CR = 5
+# ── Mesh State ────────────────────────────────────────────────────────────────
+CACHE_SIZE  = 30
+seen_msgs   = []
+my_msg_id   = 0
+relay_count = 0
 
-# --- PINS ---
+# ── Pins ──────────────────────────────────────────────────────────────────────
 sck_pin   = board.D8
 miso_pin  = board.D9
 mosi_pin  = board.D10
@@ -30,48 +39,79 @@ busy_pin  = microcontroller.pin.GPIO40
 dio1_pin  = microcontroller.pin.GPIO39
 rf_sw_pin = microcontroller.pin.GPIO38
 
-# --- SETUP ---
-# For receiving, we usually set the RF switch to RX mode 
-# (On many boards, this is False/Low, check your specific hardware schematic)
-rf_switch = digitalio.DigitalInOut(rf_sw_pin)
-rf_switch.direction = digitalio.Direction.OUTPUT
-rf_switch.value = False  # Set to False for RX 
+# ── Hardware Init ─────────────────────────────────────────────────────────────
+rf_sw = digitalio.DigitalInOut(rf_sw_pin)
+rf_sw.direction = digitalio.Direction.OUTPUT
+rf_sw.value = False                           # RX mode
 
-spi = busio.SPI(sck_pin, mosi_pin, miso_pin)
+spi  = busio.SPI(sck_pin, mosi_pin, miso_pin)
+lora = SX1262(spi, sck_pin, mosi_pin, miso_pin,
+              nss_pin, dio1_pin, rst_pin, busy_pin)
+lora.begin(freq=MY_FREQ, bw=BW, sf=SF, cr=CR,
+           useRegulatorLDO=True, tcxoVoltage=1.8)
 
-lora = SX1262(
-    spi, sck_pin, mosi_pin, miso_pin,
-    nss_pin, dio1_pin, rst_pin, busy_pin
-)
+print(f"Node {NODE_ID}  {MY_FREQ} MHz  SF{SF}  TTL={TTL_DEFAULT}")
 
-# Initialize at the group's specific frequency
-lora.begin(freq=MY_FREQ, bw=BW, sf=SF, cr=CR, useRegulatorLDO=True, tcxoVoltage=1.8)
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def already_seen(src, mid):
+    return (src, mid) in seen_msgs
 
-print(f"--- Group {GROUP_ID} Receiver Initialized ---")
-print(f"Listening on {MY_FREQ} MHz...")
+def mark_seen(src, mid):
+    seen_msgs.append((src, mid))
+    if len(seen_msgs) > CACHE_SIZE:
+        seen_msgs.pop(0)
 
-# --- MAIN RECEIVE LOOP ---
-print("Waiting for messages...")
+def encode_pkt(src, mid, ttl, payload):
+    return f"M:{src}:{mid}:{ttl}:{payload}".encode()
+
+def decode_pkt(raw):
+    try:
+        s = raw.decode().strip()
+        if not s.startswith("M:"):
+            return None
+        parts = s[2:].split(":", 3)
+        if len(parts) < 4:
+            return None
+        return int(parts[0]), int(parts[1]), int(parts[2]), parts[3]
+    except:
+        return None
+
+def mesh_send(payload):
+    """Originate a new mesh packet from this node."""
+    global my_msg_id
+    my_msg_id = (my_msg_id + 1) % 256
+    mark_seen(NODE_ID, my_msg_id)
+    lora.send(encode_pkt(NODE_ID, my_msg_id, TTL_DEFAULT, payload))
+
+# ── Main Loop ─────────────────────────────────────────────────────────────────
+print("Mesh relay running...")
+last_beacon = time.monotonic()
+
 while True:
-    # Some libraries use .get_irq_status() or simply .recv() 
-    # For many SX1262 drivers, we call .recv() which returns data if available
-    
-    data, status = lora.recv() # This returns a tuple (payload, status)
-    
+    # RX + relay
+    data, _ = lora.recv()
     if data:
-        try:
-            # Decode the received bytes
-            message = data.decode('utf-8')
-            
-            # Get signal quality
+        pkt = decode_pkt(data)
+        if pkt:
+            src, mid, ttl, payload = pkt
             rssi = lora.getRSSI()
-            snr = lora.getSNR()
-            
-            print("-" * 40)
-            print(f"Message: {message}")
-            print(f"RSSI: {rssi} dBm | SNR: {snr} dB")
-            
-        except Exception as e:
-            print(f"Received data, but error decoding: {data}")
-            
-    time.sleep(0.1)
+            snr  = lora.getSNR()
+
+            if not already_seen(src, mid):
+                mark_seen(src, mid)
+                print(f"RX src={src} mid={mid} ttl={ttl} rssi={rssi} snr={snr:.1f}  '{payload}'")
+
+                if ttl > 1:
+                    relay_count += 1
+                    time.sleep(0.05 * (NODE_ID % 5))   # per-node stagger
+                    lora.send(encode_pkt(src, mid, ttl - 1, payload))
+                    print(f"  → relayed (total relays: {relay_count})")
+
+    # Periodic beacon so the rest of the mesh knows this node is alive
+    now = time.monotonic()
+    if now - last_beacon >= 30:
+        last_beacon = now
+        mesh_send(f"BCN:{NODE_ID}")
+        print(f"TX beacon BCN:{NODE_ID}")
+
+    time.sleep(0.01)

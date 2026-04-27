@@ -1,203 +1,203 @@
 # SPDX-FileCopyrightText: 2026 Student Lab - COMP 4531 - HKUST
 # SPDX-License-Identifier: MIT
+#
+# LoRa Mesh Node — XIAO nRF52840 Sense
+# Flooding mesh with TTL-based deduplication.
+# BLE exposes a single control characteristic for dashboard commands/notifications.
 
 import time
-import struct
 import board
 import busio
 import digitalio
-import audiobusio
-import array
-import gc
 import adafruit_ble
 from adafruit_ble.advertising.standard import ProvideServicesAdvertisement
 from adafruit_ble.services import Service
 from adafruit_ble.uuid import VendorUUID
 from adafruit_ble.characteristics import Characteristic
-from adafruit_lsm6ds.lsm6ds3trc import LSM6DS3TRC
-from adafruit_lsm6ds import Rate
 from sx1262 import SX1262
 
-# --- GROUP IDENTITY ---
-GROUP_ID = 0 # <--- STUDENTS CHANGE THIS (1 to 30)
+# ── Identity ──────────────────────────────────────────────────────────────────
+GROUP_ID = 0      # ← change per board (1–30); sets BLE name and LoRa freq
+NODE_ID  = GROUP_ID
 
-# --- CONFIGURATION ---
-FREQ_BASE = 900.0
-FREQ_STEP = 1.0
-MY_FREQ = FREQ_BASE + (GROUP_ID - 1) * FREQ_STEP
+# ── LoRa Parameters ───────────────────────────────────────────────────────────
+MY_FREQ     = 900.0 + (GROUP_ID - 1) * 1.0   # MHz, unique per group
+BW          = 125.0   # kHz
+SF          = 7       # Spreading Factor — all mesh nodes must use the same value
+CR          = 5       # Coding rate 4/5
+TTL_DEFAULT = 5       # Maximum relay hops
 
-# --- AUDIO SETTINGS (LOW RAM) ---
-HARDWARE_RATE = 16000
-# 0.25s chunk = 4000 samples * 2 bytes = 8KB RAM (Very Safe)
-RECORD_CHUNK_S = 0.25 
-TOTAL_DURATION = 5.0 
-TOTAL_LOOPS    = int(TOTAL_DURATION / RECORD_CHUNK_S)
+# ── Mesh State ────────────────────────────────────────────────────────────────
+CACHE_SIZE  = 30
+seen_msgs   = []      # [(src_id, msg_id), ...]  rolling dedup window
+my_msg_id   = 0       # outgoing sequence counter 0–255
+relay_count = 0
 
-# --- PINS ---
-lora_sck = board.D8
+# ── Pins ──────────────────────────────────────────────────────────────────────
+lora_sck  = board.D8
 lora_miso = board.D9
 lora_mosi = board.D10
-lora_nss  = board.D4 
+lora_nss  = board.D4
 lora_rst  = board.D2
 lora_busy = board.D3
-lora_dio1 = board.D1 
-rf_sw_pin = board.D5 
+lora_dio1 = board.D1
+rf_sw_pin = board.D5
 
-# --- LED ---
+# ── Hardware Init ─────────────────────────────────────────────────────────────
 led = digitalio.DigitalInOut(board.LED_BLUE)
 led.direction = digitalio.Direction.OUTPUT
-led.value = True # OFF
+led.value = True                              # OFF (active-low on XIAO)
 
-# --- 1. SETUP IMU ---
-imu_present = False
+lora_ok = False
 try:
-    if hasattr(board, "IMU_PWR"):
-        digitalio.DigitalInOut(board.IMU_PWR).switch_to_output(True)
-        time.sleep(0.1)
-    i2c = busio.I2C(board.IMU_SCL, board.IMU_SDA, frequency=1000000)
-    imu = LSM6DS3TRC(i2c)
-    imu.accelerometer_data_rate = Rate.RATE_52_HZ
-    imu.gyro_data_rate = Rate.RATE_52_HZ
-    imu_present = True
-    print("IMU: OK")
-except: print("IMU: Failed")
-
-# --- 2. SETUP LORA ---
-lora_present = False
-try:
-    digitalio.DigitalInOut(rf_sw_pin).switch_to_output(False)
-    spi = busio.SPI(lora_sck, lora_mosi, lora_miso)
-    lora = SX1262(spi, lora_sck, lora_mosi, lora_miso, lora_nss, lora_dio1, lora_rst, lora_busy)
-    lora.begin(freq=MY_FREQ, bw=125.0, sf=7, cr=5, useRegulatorLDO=True, tcxoVoltage=1.6)
-    print(f"LoRa: OK ({MY_FREQ} MHz)")
-    lora_present = True
-except: print("LoRa: Failed")
-
-# --- 3. SETUP MIC ---
-mic_present = False
-raw_buffer = None
-
-try:
-    if hasattr(board, "MIC_PWR"):
-        digitalio.DigitalInOut(board.MIC_PWR).switch_to_output(True)
-        time.sleep(0.1)
-    
-    clk = board.PDM_CLK if hasattr(board, 'PDM_CLK') else board.D1
-    dat = board.PDM_DATA if hasattr(board, 'PDM_DATA') else board.D0
-    mic = audiobusio.PDMIn(clk, dat, sample_rate=HARDWARE_RATE, bit_depth=16)
-    
-    # STATIC ALLOCATION: 8KB
-    gc.collect()
-    buf_len = int(HARDWARE_RATE * RECORD_CHUNK_S)
-    raw_buffer = array.array('H', [0] * buf_len)
-    
-    print(f"Mic: OK (Buffer: {buf_len} samples)")
-    mic_present = True
+    rf_sw = digitalio.DigitalInOut(rf_sw_pin)
+    rf_sw.direction = digitalio.Direction.OUTPUT
+    rf_sw.value = False                       # RX mode
+    spi  = busio.SPI(lora_sck, lora_mosi, lora_miso)
+    lora = SX1262(spi, lora_sck, lora_mosi, lora_miso,
+                  lora_nss, lora_dio1, lora_rst, lora_busy)
+    lora.begin(freq=MY_FREQ, bw=BW, sf=SF, cr=CR,
+               useRegulatorLDO=True, tcxoVoltage=1.6)
+    lora_ok = True
+    print(f"LoRa OK  {MY_FREQ} MHz  SF{SF}  BW{BW}")
 except Exception as e:
-    print(f"Mic Failed: {e}")
+    print(f"LoRa FAIL: {e}")
 
-# --- 4. BLE SERVICES ---
-gid_hex = f"{GROUP_ID:02x}"
-IMU_SERVICE_UUID      = VendorUUID(f"13172b58-{gid_hex}40-4150-b42d-22f30b0a0499")
-IMU_DATA_CHAR_UUID    = VendorUUID(f"13172b58-{gid_hex}41-4150-b42d-22f30b0a0499")
-IMU_CONTROL_CHAR_UUID = VendorUUID(f"13172b58-{gid_hex}42-4150-b42d-22f30b0a0499")
-AUDIO_DATA_CHAR_UUID  = VendorUUID(f"13172b58-{gid_hex}44-4150-b42d-22f30b0a0499")
+# ── BLE Service ───────────────────────────────────────────────────────────────
+gid_hex   = f"{GROUP_ID:02x}"
+SVC_UUID  = VendorUUID(f"13172b58-{gid_hex}40-4150-b42d-22f30b0a0499")
+CTRL_UUID = VendorUUID(f"13172b58-{gid_hex}42-4150-b42d-22f30b0a0499")
 
-class LabService(Service):
-    uuid = IMU_SERVICE_UUID
-    imu_data = Characteristic(uuid=IMU_DATA_CHAR_UUID, properties=Characteristic.NOTIFY, max_length=24)
+class MeshService(Service):
+    uuid    = SVC_UUID
     control = Characteristic(
-        uuid=IMU_CONTROL_CHAR_UUID, 
-        properties=Characteristic.WRITE | Characteristic.WRITE_NO_RESPONSE | Characteristic.READ | Characteristic.NOTIFY, 
-        max_length=50
+        uuid=CTRL_UUID,
+        properties=( Characteristic.WRITE
+                   | Characteristic.WRITE_NO_RESPONSE
+                   | Characteristic.READ
+                   | Characteristic.NOTIFY ),
+        max_length=100
     )
-    audio_data = Characteristic(uuid=AUDIO_DATA_CHAR_UUID, properties=Characteristic.NOTIFY, max_length=200)
 
-ble = adafruit_ble.BLERadio()
-ble.name = f"COMP4531_G{GROUP_ID}"
-lab_service = LabService()
-advertisement = ProvideServicesAdvertisement(lab_service)
+ble      = adafruit_ble.BLERadio()
+ble.name = f"MESH_G{GROUP_ID}"
+mesh_svc = MeshService()
+adv      = ProvideServicesAdvertisement(mesh_svc)
 
-# --- HELPERS ---
-def blink_led(times=1):
-    for _ in range(times):
-        led.value = False; time.sleep(0.05); led.value = True; time.sleep(0.05)
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def blink(n=1):
+    for _ in range(n):
+        led.value = False; time.sleep(0.05)
+        led.value = True;  time.sleep(0.05)
 
-def record_and_send_audio():
-    if not mic_present or raw_buffer is None: return
-    print("Streaming...")
-    blink_led(3)
-    
-    for _ in range(TOTAL_LOOPS):
-        # 1. Record 0.25s (Blocking)
-        mic.record(raw_buffer, len(raw_buffer))
-        
-        # 2. Compress (High byte of every 2nd sample)
-        # Note: Creating 'compressed' here allocates ~4KB transient RAM.
-        # Since we freed everything else, it should fit.
-        compressed = bytes([raw_buffer[i] // 256 for i in range(0, len(raw_buffer), 2)])
-        
-        # 3. Send via BLE
-        offset = 0
-        while offset < len(compressed):
-            try:
-                lab_service.audio_data = compressed[offset : offset + 200]
-                time.sleep(0.01) # Critical for stability
-            except: pass
-            offset += 200
-            
-        # 4. Clean up immediately
-        del compressed
-        gc.collect()
+def already_seen(src, mid):
+    return (src, mid) in seen_msgs
 
-    try: lab_service.audio_data = b'' 
-    except: pass
-    print("Done.")
+def mark_seen(src, mid):
+    seen_msgs.append((src, mid))
+    if len(seen_msgs) > CACHE_SIZE:
+        seen_msgs.pop(0)
 
-# --- MAIN LOOP ---
-mode = "IDLE" 
-print(f"Group {GROUP_ID} Ready (Hex: {gid_hex})")
+def encode_pkt(src, mid, ttl, payload):
+    return f"M:{src}:{mid}:{ttl}:{payload}".encode()
+
+def decode_pkt(raw):
+    try:
+        s = raw.decode().strip()
+        if not s.startswith("M:"):
+            return None
+        parts = s[2:].split(":", 3)
+        if len(parts) < 4:
+            return None
+        return int(parts[0]), int(parts[1]), int(parts[2]), parts[3]
+    except:
+        return None
+
+def lora_tx(src, mid, ttl, payload):
+    try:
+        lora.send(encode_pkt(src, mid, ttl, payload))
+    except Exception as e:
+        print(f"TX err: {e}")
+
+def ble_notify(msg):
+    """Push a notification to the connected BLE central (dashboard)."""
+    try:
+        mesh_svc.control = msg.encode()[:100]
+    except:
+        pass
+
+def lora_rx_and_relay():
+    """Non-blocking LoRa receive with flood relay. Safe to call from any loop."""
+    global relay_count
+    if not lora_ok:
+        return
+    try:
+        data, _ = lora.recv()
+        if not data:
+            return
+        pkt = decode_pkt(data)
+        if not pkt:
+            return
+        src, mid, ttl, payload = pkt
+        rssi = lora.getRSSI()
+        snr  = lora.getSNR()
+
+        if already_seen(src, mid):
+            return                            # duplicate — drop silently
+        mark_seen(src, mid)
+
+        blink(1)
+        print(f"RX src={src} mid={mid} ttl={ttl} rssi={rssi} snr={snr:.1f} '{payload}'")
+        ble_notify(f"MESH_RX:{src}|{mid}|{ttl}|{rssi}|{snr:.1f}|{payload}")
+
+        if ttl > 1:
+            relay_count += 1
+            time.sleep(0.05 * (NODE_ID % 5))  # stagger rebroadcast to reduce collisions
+            lora_tx(src, mid, ttl - 1, payload)
+    except Exception as e:
+        print(f"RX err: {e}")
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+print(f"Node {NODE_ID}  {MY_FREQ} MHz  SF{SF}  TTL={TTL_DEFAULT}")
+blink(3)
 
 while True:
-    ble.start_advertising(advertisement)
+    # Advertise until a central (dashboard) connects
+    ble.start_advertising(adv)
     while not ble.connected:
-        led.value = False; time.sleep(0.1); led.value = True; time.sleep(0.9)
-    ble.stop_advertising()
-    print("Connected.")
-    blink_led(5) 
-    
-    lab_service.control = b''
-    
-    while ble.connected:
-        try:
-            val = lab_service.control
-            if val is not None and len(val) > 0:
-                blink_led(1)
-                try: cmd = val.decode("utf-8").strip().replace('\x00', '')
-                except: cmd = ""
-                
-                print(f"RX: {cmd}")
-                lab_service.control = b'' 
-                
-                if cmd.startswith("SEND_LORA:") and lora_present:
-                    lora.send(bytes(cmd.split(":", 1)[1], "utf-8"))
-                elif cmd == "REC_AUDIO":
-                    mode = "IDLE"; record_and_send_audio()
-                elif cmd == "START":
-                    mode = "IMU"
-                elif cmd == "STOP":
-                    mode = "IDLE"
-        except: pass
+        led.value = False; time.sleep(0.15)
+        led.value = True;  time.sleep(0.85)
+        lora_rx_and_relay()               # keep relaying even while BLE is unconnected
 
-        if mode == "IMU" and imu_present:
-            try:
-                ax, ay, az = imu.acceleration
-                gx, gy, gz = imu.gyro
-                lab_service.imu_data = struct.pack("<ffffff", ax, ay, az, gx, gy, gz)
-            except: pass
-        
-        # Non-blocking check for LoRa (Disabled to prevent freezing if lib blocks)
-        # if lora_present: ...
-             
+    ble.stop_advertising()
+    print("BLE connected")
+    blink(5)
+    mesh_svc.control = b''
+
+    while ble.connected:
+        # ── BLE command handler ───────────────────────────────────────────────
+        try:
+            val = mesh_svc.control
+            if val and len(val) > 1:
+                cmd = val.decode('utf-8', 'ignore').strip().replace('\x00', '')
+                mesh_svc.control = b''    # clear immediately after reading
+
+                # Skip our own notification echoes (peripheral reads back what it wrote)
+                if cmd and not cmd.startswith('MESH_'):
+                    blink(1)
+                    print(f"CMD: {cmd}")
+
+                    if cmd.startswith('SEND_MESH:') and lora_ok:
+                        my_msg_id = (my_msg_id + 1) % 256
+                        payload   = cmd[10:]
+                        mark_seen(NODE_ID, my_msg_id)
+                        lora_tx(NODE_ID, my_msg_id, TTL_DEFAULT, payload)
+                        ble_notify(f"MESH_TX:{NODE_ID}|{my_msg_id}|{TTL_DEFAULT}|{payload}")
+        except:
+            pass
+
+        # ── LoRa RX + relay ───────────────────────────────────────────────────
+        lora_rx_and_relay()
         time.sleep(0.001)
-    print("Disconnected.")
+
+    print("BLE disconnected")
