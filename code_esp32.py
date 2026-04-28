@@ -40,17 +40,20 @@ dio1_pin  = microcontroller.pin.GPIO39
 rf_sw_pin = microcontroller.pin.GPIO38
 
 # ── Hardware Init ─────────────────────────────────────────────────────────────
-rf_sw = digitalio.DigitalInOut(rf_sw_pin)
-rf_sw.direction = digitalio.Direction.OUTPUT
-rf_sw.value = False                           # RX mode
+try:
+    rf_sw = digitalio.DigitalInOut(rf_sw_pin)
+    rf_sw.direction = digitalio.Direction.OUTPUT
+    rf_sw.value = False                       # RX mode
 
-spi  = busio.SPI(sck_pin, mosi_pin, miso_pin)
-lora = SX1262(spi, sck_pin, mosi_pin, miso_pin,
-              nss_pin, dio1_pin, rst_pin, busy_pin)
-lora.begin(freq=MESH_FREQ, bw=BW, sf=SF, cr=CR,
-           useRegulatorLDO=True, tcxoVoltage=1.8)
-
-print(f"Node {NODE_ID}  {MESH_FREQ} MHz  SF{SF}  TTL={TTL_DEFAULT}")
+    spi  = busio.SPI(sck_pin, mosi_pin, miso_pin)
+    lora = SX1262(spi, sck_pin, mosi_pin, miso_pin,
+                  nss_pin, dio1_pin, rst_pin, busy_pin)
+    lora.begin(freq=MESH_FREQ, bw=BW, sf=SF, cr=CR,
+               useRegulatorLDO=True, tcxoVoltage=1.8, power=22)
+    print(f"Node {NODE_ID}  {MESH_FREQ} MHz  SF{SF}  TTL={TTL_DEFAULT}")
+except Exception as e:
+    print(f"LoRa FAIL: {e}")
+    raise
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def already_seen(src, mid):
@@ -76,12 +79,18 @@ def decode_pkt(raw):
     except:
         return None
 
+def lora_send(pkt_bytes):
+    """Transmit bytes — toggles RF switch to TX path and back."""
+    rf_sw.value = True
+    lora.send(pkt_bytes)
+    rf_sw.value = False
+
 def mesh_send(payload):
     """Originate a new mesh packet from this node."""
     global my_msg_id
     my_msg_id = (my_msg_id + 1) % 256
     mark_seen(NODE_ID, my_msg_id)
-    lora.send(encode_pkt(NODE_ID, my_msg_id, TTL_DEFAULT, payload))
+    lora_send(encode_pkt(NODE_ID, my_msg_id, TTL_DEFAULT, payload))
 
 # ── Main Loop ─────────────────────────────────────────────────────────────────
 print("Mesh relay running...")
@@ -89,25 +98,35 @@ last_beacon = time.monotonic()
 
 while True:
     # RX + relay
-    data, _ = lora.recv()
-    if data:
-        pkt = decode_pkt(data)
-        if pkt:
-            src, mid, ttl, payload = pkt
-            rssi = lora.getRSSI()
-            snr  = lora.getSNR()
+    try:
+        result = lora.recv(timeout_en=True, timeout_ms=300)
+        if result and isinstance(result, tuple) and len(result) == 2:
+            data, _ = result
+            if data:
+                pkt = decode_pkt(data)
+                if pkt:
+                    src, mid, ttl, payload = pkt
+                    rssi = lora.getRSSI()
+                    snr  = lora.getSNR()
 
-            if not already_seen(src, mid):
-                mark_seen(src, mid)
-                print(f"RX src={src} mid={mid} ttl={ttl} rssi={rssi} snr={snr:.1f}  '{payload}'")
+                    if not already_seen(src, mid):
+                        mark_seen(src, mid)
+                        print(f"RX src={src} mid={mid} ttl={ttl} rssi={rssi} snr={snr:.1f}  '{payload}'")
 
-                if ttl > 1:
-                    relay_count += 1
-                    time.sleep(0.05 * (NODE_ID % 5))   # per-node stagger
-                    lora.send(encode_pkt(src, mid, ttl - 1, payload))
-                    print(f"  → relayed (total relays: {relay_count})")
+                        if ttl > 1:
+                            relay_count += 1
+                            time.sleep(0.05 * (NODE_ID % 5))
+                            lora_send(encode_pkt(src, mid, ttl - 1, payload))
+                            print(f"  → relayed (total relays: {relay_count})")
 
-    # Periodic beacon so the rest of the mesh knows this node is alive
+                        if payload.startswith("PARROT:"):
+                            time.sleep(0.15)
+                            mesh_send(f"PONG:{NODE_ID}:{payload[7:]}")
+                            print(f"  → PONG sent for parrot")
+    except Exception as e:
+        print(f"RX err: {e}")
+
+    # Periodic beacon
     now = time.monotonic()
     if now - last_beacon >= 30:
         last_beacon = now

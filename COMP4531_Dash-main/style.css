@@ -359,6 +359,30 @@ input:focus {
 .mesh-node-id   { font-weight: 700; font-family: 'JetBrains Mono', monospace; }
 .mesh-node-meta { color: var(--text-secondary); font-size: 11px; text-align: right; }
 
+/* --- FLASH SECTION --- */
+.flash-section {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(0,0,0,0.06);
+}
+.flash-label {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--text-secondary); margin-bottom: 10px;
+}
+.flash-hint {
+    margin: 8px 0 0; font-size: 11px; color: var(--text-secondary); text-align: center;
+}
+.btn-flash {
+    flex: 1; border: 1px solid rgba(0,0,0,0.1);
+    background: rgba(255,255,255,0.6); color: var(--text-primary);
+    padding: 10px; border-radius: 12px; font-size: 13px; font-weight: 600;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: 0.2s var(--spring-easing);
+}
+.btn-flash:hover { background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+.btn-flash:active { transform: scale(0.97); }
+.btn-flash.flashing { opacity: 0.6; pointer-events: none; }
+
 /* --- RESPONSIVE --- */
 @media (max-width: 768px) {
     .glass-sidebar { width: 220px; padding: 16px; }

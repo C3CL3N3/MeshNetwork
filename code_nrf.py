@@ -3,7 +3,7 @@
 #
 # LoRa Mesh Node — XIAO nRF52840 Sense
 # Flooding mesh with TTL-based deduplication.
-# BLE exposes a single control characteristic for dashboard commands/notifications.
+# BLE exposes two characteristics: cmd_rx (central→node) and data_tx (node→central).
 
 import time
 import board
@@ -65,18 +65,24 @@ except Exception as e:
     print(f"LoRa FAIL: {e}")
 
 # ── BLE Service ───────────────────────────────────────────────────────────────
-gid_hex   = f"{GROUP_ID:02x}"
-SVC_UUID  = VendorUUID(f"13172b58-{gid_hex}40-4150-b42d-22f30b0a0499")
-CTRL_UUID = VendorUUID(f"13172b58-{gid_hex}42-4150-b42d-22f30b0a0499")
+# Two separate characteristics — no shared write/notify ambiguity:
+#   cmd_rx  (UUID …41…): central writes commands here; peripheral polls it
+#   data_tx (UUID …42…): peripheral writes notifications here; central subscribes
+gid_hex    = f"{GROUP_ID:02x}"
+SVC_UUID   = VendorUUID(f"13172b58-{gid_hex}40-4150-b42d-22f30b0a0499")
+CMD_UUID   = VendorUUID(f"13172b58-{gid_hex}41-4150-b42d-22f30b0a0499")
+NOTIF_UUID = VendorUUID(f"13172b58-{gid_hex}42-4150-b42d-22f30b0a0499")
 
 class MeshService(Service):
     uuid    = SVC_UUID
-    control = Characteristic(
-        uuid=CTRL_UUID,
-        properties=( Characteristic.WRITE
-                   | Characteristic.WRITE_NO_RESPONSE
-                   | Characteristic.READ
-                   | Characteristic.NOTIFY ),
+    cmd_rx  = Characteristic(
+        uuid=CMD_UUID,
+        properties=(Characteristic.WRITE | Characteristic.WRITE_NO_RESPONSE),
+        max_length=100
+    )
+    data_tx = Characteristic(
+        uuid=NOTIF_UUID,
+        properties=(Characteristic.READ | Characteristic.NOTIFY),
         max_length=100
     )
 
@@ -116,25 +122,31 @@ def decode_pkt(raw):
 
 def lora_tx(src, mid, ttl, payload):
     try:
+        rf_sw.value = True                    # flip antenna to TX path
         lora.send(encode_pkt(src, mid, ttl, payload))
+        rf_sw.value = False                   # flip back to RX path
         print(f"TX src={src} mid={mid} ttl={ttl} '{payload}'")
     except Exception as e:
+        rf_sw.value = False
         print(f"TX err: {e}")
 
 def ble_notify(msg):
-    """Push a notification to the connected BLE central (dashboard)."""
+    """Push a string notification to the connected central via data_tx."""
     try:
-        mesh_svc.control = msg.encode()[:100]
-    except:
-        pass
+        mesh_svc.data_tx = msg.encode()[:100]
+    except Exception as e:
+        print(f"notify err: {e}")
 
 def lora_rx_and_relay():
-    """Non-blocking LoRa receive with flood relay. Safe to call from any loop."""
+    """Non-blocking LoRa receive with flood relay."""
     global relay_count
     if not lora_ok:
         return
     try:
-        data, _ = lora.recv()
+        result = lora.recv(timeout_en=True, timeout_ms=300)
+        if not result or not isinstance(result, tuple) or len(result) < 2:
+            return
+        data, _ = result
         if not data:
             return
         pkt = decode_pkt(data)
@@ -145,7 +157,7 @@ def lora_rx_and_relay():
         snr  = lora.getSNR()
 
         if already_seen(src, mid):
-            return                            # duplicate — drop silently
+            return
         mark_seen(src, mid)
 
         blink(1)
@@ -154,7 +166,7 @@ def lora_rx_and_relay():
 
         if ttl > 1:
             relay_count += 1
-            time.sleep(0.05 * (NODE_ID % 5))  # stagger rebroadcast to reduce collisions
+            time.sleep(0.05 * (NODE_ID % 5))
             lora_tx(src, mid, ttl - 1, payload)
     except Exception as e:
         print(f"RX err: {e}")
@@ -164,39 +176,56 @@ print(f"Node {NODE_ID}  {MESH_FREQ} MHz  SF{SF}  TTL={TTL_DEFAULT}")
 blink(3)
 
 while True:
-    # Advertise until a central (dashboard) connects
     ble.start_advertising(adv)
     while not ble.connected:
         led.value = False; time.sleep(0.15)
         led.value = True;  time.sleep(0.85)
-        lora_rx_and_relay()               # keep relaying even while BLE is unconnected
+        lora_rx_and_relay()
 
     ble.stop_advertising()
     print("BLE connected")
     blink(5)
-    mesh_svc.control = b''
+
+    # Wait for browser to complete startNotifications(), then introduce ourselves
+    time.sleep(1.5)
+    ble_notify(f"MESH_INFO:NODE_ID:{NODE_ID}")
+
+    last_ping = time.monotonic()
+    ping_n    = 0
 
     while ble.connected:
-        # ── BLE command handler ───────────────────────────────────────────────
+        # ── Heartbeat — fires every 5 s regardless of commands ────────────────
+        now = time.monotonic()
+        if now - last_ping >= 5.0:
+            last_ping = now
+            ping_n += 1
+            ble_notify(f"MESH_PING:{ping_n}")
+            print(f"PING {ping_n}")
+
+        # ── BLE command handler (reads cmd_rx, never interferes with data_tx) ─
         try:
-            val = mesh_svc.control
+            val = mesh_svc.cmd_rx
             if val and len(val) > 1:
                 cmd = val.decode('utf-8', 'ignore').strip().replace('\x00', '')
-                mesh_svc.control = b''    # clear immediately after reading
-
-                # Skip our own notification echoes (peripheral reads back what it wrote)
-                if cmd and not cmd.startswith('MESH_'):
+                mesh_svc.cmd_rx = b''          # clear so same cmd isn't re-processed
+                if cmd:
                     blink(1)
                     print(f"CMD: {cmd}")
 
-                    if cmd.startswith('SEND_MESH:') and lora_ok:
-                        my_msg_id = (my_msg_id + 1) % 256
-                        payload   = cmd[10:]
-                        mark_seen(NODE_ID, my_msg_id)
-                        lora_tx(NODE_ID, my_msg_id, TTL_DEFAULT, payload)
-                        ble_notify(f"MESH_TX:{NODE_ID}|{my_msg_id}|{TTL_DEFAULT}|{payload}")
-        except:
-            pass
+                    if cmd.startswith('PARROT:'):
+                        ble_notify(f"MESH_PARROT:{cmd[7:]}")
+
+                    elif cmd.startswith('SEND_MESH:'):
+                        if lora_ok:
+                            my_msg_id = (my_msg_id + 1) % 256
+                            payload   = cmd[10:]
+                            mark_seen(NODE_ID, my_msg_id)
+                            lora_tx(NODE_ID, my_msg_id, TTL_DEFAULT, payload)
+                            ble_notify(f"MESH_TX:{NODE_ID}|{my_msg_id}|{TTL_DEFAULT}|{payload}")
+                        else:
+                            ble_notify("MESH_ERR:LORA_FAIL")
+        except Exception as e:
+            print(f"loop err: {e}")
 
         # ── LoRa RX + relay ───────────────────────────────────────────────────
         lora_rx_and_relay()

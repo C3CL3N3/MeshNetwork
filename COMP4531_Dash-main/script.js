@@ -2,7 +2,7 @@
 // GLOBAL VARIABLES
 // =============================================
 let currentTab = 'home';
-let device, server, service, ctrlChar;
+let device, server, service, writeChar, notifyChar;
 
 // LoRa metrics & graphing
 let loraCsvRows  = [["Timestamp", "Direction", "Message", "LoRa_SNR", "LoRa_RSSI", "Hops"]];
@@ -49,30 +49,34 @@ async function connect() {
         if (badge) badge.innerText = `${freq} MHz`;
         document.getElementById('loraBadge').innerText = `${freq} MHz`;
 
+        // cmd_rx  (…41…): we WRITE commands here
+        // data_tx (…42…): we SUBSCRIBE for notifications here
         const UUIDS = {
-            svc:  `${base}40-4150-b42d-22f30b0a0499`,
-            ctrl: `${base}42-4150-b42d-22f30b0a0499`,
+            svc:    `${base}40-4150-b42d-22f30b0a0499`,
+            write:  `${base}41-4150-b42d-22f30b0a0499`,
+            notify: `${base}42-4150-b42d-22f30b0a0499`,
         };
 
         log(`Connecting Group ${gid}…`);
 
         device = await navigator.bluetooth.requestDevice({
-            filters: [{ services: [UUIDS.svc] }],
-            optionalServices: [UUIDS.svc]
+            filters:          [{ services: [UUIDS.svc] }],
+            optionalServices: [UUIDS.svc],
         });
         device.addEventListener('gattserverdisconnected', onDisconnect);
 
         server  = await device.gatt.connect();
         service = await server.getPrimaryService(UUIDS.svc);
 
-        ctrlChar = await service.getCharacteristic(UUIDS.ctrl);
-        await ctrlChar.startNotifications();
-        ctrlChar.addEventListener('characteristicvaluechanged', handleControlData);
+        writeChar  = await service.getCharacteristic(UUIDS.write);
+        notifyChar = await service.getCharacteristic(UUIDS.notify);
+        await notifyChar.startNotifications();
+        notifyChar.addEventListener('characteristicvaluechanged', handleControlData);
 
         document.getElementById('connStatus').innerText = "Connected";
         document.getElementById('statusDot').classList.add('active');
-        document.getElementById('conBtn').disabled  = true;
-        document.getElementById('disBtn').disabled  = false;
+        document.getElementById('conBtn').disabled = true;
+        document.getElementById('disBtn').disabled = false;
 
         // Initialise mesh topology
         meshMyId = gid;
@@ -107,15 +111,16 @@ function onDisconnect() {
     document.getElementById('statusDot').classList.remove('active');
     document.getElementById('conBtn').disabled = false;
     document.getElementById('disBtn').disabled = true;
+    writeChar = null; notifyChar = null;
     log("Disconnected");
 }
 
 async function send(cmd) {
-    if (!ctrlChar) return;
+    if (!writeChar) return;
     const data = new TextEncoder().encode(cmd);
     try {
-        if (ctrlChar.properties.writeWithoutResponse) await ctrlChar.writeValueWithoutResponse(data);
-        else await ctrlChar.writeValue(data);
+        if (writeChar.properties.writeWithoutResponse) await writeChar.writeValueWithoutResponse(data);
+        else await writeChar.writeValue(data);
     } catch (e) { log("Tx Error: " + e); }
 }
 
@@ -174,8 +179,12 @@ function handleControlData(e) {
     const msg = new TextDecoder().decode(e.target.value);
     if (!msg || msg.length === 0) return;
 
-    if (msg.startsWith("MESH_RX:")) { handleMeshRx(msg.substring(8)); return; }
-    if (msg.startsWith("MESH_TX:")) { handleMeshTx(msg.substring(8)); return; }
+    if (msg.startsWith("MESH_RX:"))      { handleMeshRx(msg.substring(8)); return; }
+    if (msg.startsWith("MESH_TX:"))      { handleMeshTx(msg.substring(8)); return; }
+    if (msg.startsWith("MESH_INFO:"))    { handleMeshInfo(msg.substring(10)); return; }
+    if (msg.startsWith("MESH_PING:"))    { log("♥ heartbeat " + msg.substring(10)); return; }
+    if (msg.startsWith("MESH_ERR:"))     { log("Node error: " + msg.substring(9)); return; }
+    if (msg.startsWith("MESH_PARROT:"))  { log("✓ BLE parrot OK → \"" + msg.substring(12) + "\""); return; }
 
     // Legacy format kept for backward compat
     if (msg.startsWith("LORA_RX:")) {
@@ -442,6 +451,30 @@ function updateMeshNodeList() {
     });
 }
 
+function handleMeshInfo(data) {
+    // data = "NODE_ID:<n>" — nRF tells us its actual mesh NODE_ID on BLE connect
+    const match = data.match(/^NODE_ID:(\d+)$/);
+    if (!match) return;
+    const nodeId = parseInt(match[1]);
+    if (nodeId === meshMyId) return;
+
+    // Move the "YOU" node from the old meshMyId to the real NODE_ID
+    const oldNode = meshNodes.get(meshMyId);
+    meshNodes.delete(meshMyId);
+    meshMyId = nodeId;
+    if (oldNode) { oldNode.id = meshMyId; meshNodes.set(meshMyId, oldNode); }
+    else {
+        const c = document.getElementById('meshCanvas');
+        meshNodes.set(meshMyId, {
+            id: meshMyId, hops: 0, rssi: 0, snr: 0, msgCount: 0,
+            x: c ? c.clientWidth / 2 : 300, y: c ? c.clientHeight / 2 : 200,
+            vx: 0, vy: 0, lastSeen: Date.now()
+        });
+    }
+    document.getElementById('meshMyNodeId').innerText = `Node ${meshMyId}`;
+    log(`Gateway NODE_ID = ${meshMyId}`);
+}
+
 function handleMeshRx(data) {
     // format: src|mid|ttl|rssi|snr|payload
     const parts = data.split('|');
@@ -516,8 +549,74 @@ function addMeshLog(msg, type) {
 async function sendMesh() {
     const input = document.getElementById('meshMsgInput');
     if (!input || !input.value.trim()) return;
-    await send('SEND_MESH:' + input.value.trim());
+    const msg = input.value.trim();
     input.value = '';
+    addMeshLog(`→ TX  "${msg}"`, 'tx');
+    addChatBubble(msg, 'out');
+    loraCsvRows.push([new Date().toISOString(), "TX", msg, "", "", ""]);
+    await send('SEND_MESH:' + msg);
+}
+
+// =============================================
+// FIRMWARE FLASH
+// =============================================
+async function flashDevice(board) {
+    if (!window.showOpenFilePicker || !window.showDirectoryPicker) {
+        log('Flash requires Chrome 86+ with File System Access API.');
+        return;
+    }
+
+    const label    = board === 'nrf' ? 'nRF52840' : 'ESP32-S3';
+    const hint     = board === 'nrf' ? 'code_nrf.py' : 'code_esp32.py';
+    const btns     = document.querySelectorAll('.btn-flash');
+    btns.forEach(b => b.classList.add('flashing'));
+
+    try {
+        // Step 1 — pick the source firmware file
+        log(`[Flash ${label}] Select ${hint}…`);
+        const [srcHandle] = await window.showOpenFilePicker({
+            id: 'firmware-src',
+            types: [{ description: 'CircuitPython firmware', accept: { 'text/x-python': ['.py'] } }],
+        });
+        const srcFile = await srcHandle.getFile();
+        const content = await srcFile.text();
+        log(`[Flash ${label}] ${srcFile.name} loaded (${content.length} bytes) — now select CIRCUITPY drive…`);
+
+        // Step 2 — pick the destination CIRCUITPY drive root
+        const destDir = await window.showDirectoryPicker({
+            id: 'circuitpy-' + board,
+            mode: 'readwrite',
+        });
+
+        // Step 3 — write as code.py
+        const destHandle = await destDir.getFileHandle('code.py', { create: true });
+        const writable   = await destHandle.createWritable();
+        await writable.write(content);
+        await writable.close();
+
+        log(`✓ ${label} flashed → ${destDir.name}/code.py  (board will restart)`);
+    } catch (e) {
+        if (e.name !== 'AbortError') log(`Flash error: ${e.message}`);
+    } finally {
+        btns.forEach(b => b.classList.remove('flashing'));
+    }
+}
+
+// =============================================
+// PARROT TESTS
+// =============================================
+async function parrotTest() {
+    if (!ctrlChar) { log("Not connected"); return; }
+    const tag = Date.now() % 10000;
+    log(`BLE parrot → sending PARROT:${tag} …`);
+    await send(`PARROT:${tag}`);
+}
+
+async function loraParrotTest() {
+    if (!ctrlChar) { log("Not connected"); return; }
+    const tag = Date.now() % 10000;
+    log(`LoRa parrot → sending PARROT:${tag} over mesh …`);
+    await send(`SEND_MESH:PARROT:${tag}`);
 }
 
 // =============================================
