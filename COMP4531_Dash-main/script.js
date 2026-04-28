@@ -88,13 +88,16 @@ async function connect() {
         document.getElementById('meshNodeCount').innerText = '0';
         document.getElementById('meshMyNodeId').innerText  = `Node ${gid}`;
         document.getElementById('meshFreq').innerText      = `${freq} MHz`;
-        const mc = document.getElementById('meshCanvas');
+
+        const svg = document.getElementById('meshSvg');
+        const w = svg ? svg.clientWidth  : 600;
+        const h = svg ? svg.clientHeight : 400;
         meshNodes.set(meshMyId, {
             id: meshMyId, hops: 0, rssi: 0, snr: 0, msgCount: 0,
-            x: mc ? mc.clientWidth  / 2 : 300,
-            y: mc ? mc.clientHeight / 2 : 200,
+            x: w / 2, y: h / 2,
             vx: 0, vy: 0, lastSeen: Date.now()
         });
+        meshD3Update();
 
         log("Connected!");
     } catch (e) {
@@ -242,69 +245,14 @@ const meshNodes     = new Map();
 const meshLinks     = new Map();
 const meshParticles = [];
 
-function meshInit() {
-    meshResize();
-    meshAnimLoop();
-    setInterval(updateMeshNodeList, 2000);
-}
-
-function meshResize() {
-    const c = document.getElementById('meshCanvas');
-    if (!c) return;
-    c.width  = c.clientWidth;
-    c.height = c.clientHeight;
-    const myNode = meshNodes.get(meshMyId);
-    if (myNode) { myNode.x = c.width / 2; myNode.y = c.height / 2; }
-}
-
-function meshAnimLoop() {
-    if (document.getElementById('view-mesh')?.classList.contains('active')) {
-        meshPhysicsStep();
-        meshDraw();
-    }
-    requestAnimationFrame(meshAnimLoop);
-}
-
-function meshPhysicsStep() {
-    const c = document.getElementById('meshCanvas');
-    if (!c) return;
-    const cx = c.width / 2, cy = c.height / 2;
-    const nodes = [...meshNodes.values()];
-
-    const myNode = meshNodes.get(meshMyId);
-    if (myNode) { myNode.x = cx; myNode.y = cy; myNode.vx = 0; myNode.vy = 0; }
-
-    for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-            const a = nodes[i], b = nodes[j];
-            const dx = b.x - a.x, dy = b.y - a.y;
-            const d  = Math.sqrt(dx * dx + dy * dy) || 1;
-            const f  = 3000 / (d * d);
-            const fx = (dx / d) * f, fy = (dy / d) * f;
-            if (a.id !== meshMyId) { a.vx -= fx; a.vy -= fy; }
-            if (b.id !== meshMyId) { b.vx += fx; b.vy += fy; }
-        }
-    }
-
-    nodes.forEach(n => {
-        if (n.id === meshMyId) return;
-        const targetR = 120 + (n.hops || 1) * 80;
-        const dx = n.x - cx, dy = n.y - cy;
-        const d  = Math.sqrt(dx * dx + dy * dy) || 1;
-        const sf = (d - targetR) * 0.03;
-        n.vx -= (dx / d) * sf; n.vy -= (dy / d) * sf;
-    });
-
-    nodes.forEach(n => {
-        if (n.id === meshMyId) return;
-        n.vx *= 0.85; n.vy *= 0.85;
-        n.x  += n.vx; n.y  += n.vy;
-        if (c) {
-            n.x = Math.max(40, Math.min(c.width  - 40, n.x));
-            n.y = Math.max(40, Math.min(c.height - 40, n.y));
-        }
-    });
-}
+// D3 state
+let meshSim          = null;
+let meshSvgRoot      = null;
+let meshZoomTransform = d3.zoomIdentity;
+let selectedDst      = 0;
+let _serialPort      = null;
+let _serialWriter    = null;
+let _particleId      = 0;
 
 function rssiColor(rssi) {
     if (rssi > -70) return '#30d158';
@@ -312,103 +260,296 @@ function rssiColor(rssi) {
     return '#ff453a';
 }
 
-function meshDraw() {
-    const c = document.getElementById('meshCanvas');
-    if (!c) return;
-    const ctx = c.getContext('2d');
-    const w = c.width, h = c.height, cx = w / 2, cy = h / 2;
-    const now = Date.now();
+function meshInit() {
+    const svgEl = document.getElementById('meshSvg');
+    if (!svgEl) return;
 
-    ctx.fillStyle = '#0c1020';
-    ctx.fillRect(0, 0, w, h);
+    const svg = d3.select('#meshSvg');
+    const w   = svgEl.clientWidth  || 600;
+    const h   = svgEl.clientHeight || 400;
 
-    ctx.fillStyle = 'rgba(255,255,255,0.025)';
-    for (let x = 0; x < w; x += 32)
-        for (let y = 0; y < h; y += 32) {
-            ctx.beginPath(); ctx.arc(x, y, 1, 0, Math.PI * 2); ctx.fill();
-        }
+    svg.attr('width', w).attr('height', h);
 
-    ctx.setLineDash([3, 8]);
-    [120, 200, 280].forEach((r, i) => {
-        ctx.strokeStyle = `rgba(255,255,255,${0.04 - i * 0.01})`;
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
-    });
-    ctx.setLineDash([]);
+    // Defs: glow filters + dot pattern
+    const defs = svg.append('defs');
 
+    // Node glow filter
+    const nodeGlow = defs.append('filter').attr('id', 'node-glow').attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%');
+    nodeGlow.append('feGaussianBlur').attr('stdDeviation', '6').attr('result', 'coloredBlur');
+    const nodeMerge = nodeGlow.append('feMerge');
+    nodeMerge.append('feMergeNode').attr('in', 'coloredBlur');
+    nodeMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+    // Packet glow filter
+    const pktGlow = defs.append('filter').attr('id', 'pkt-glow').attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%');
+    pktGlow.append('feGaussianBlur').attr('stdDeviation', '4').attr('result', 'coloredBlur');
+    const pktMerge = pktGlow.append('feMerge');
+    pktMerge.append('feMergeNode').attr('in', 'coloredBlur');
+    pktMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+    // Dot pattern
+    const pattern = defs.append('pattern')
+        .attr('id', 'mesh-bg-dots')
+        .attr('width', 32).attr('height', 32)
+        .attr('patternUnits', 'userSpaceOnUse');
+    pattern.append('circle').attr('cx', 1).attr('cy', 1).attr('r', 1).attr('fill', 'rgba(255,255,255,0.04)');
+
+    // Background rect
+    svg.append('rect').attr('width', '100%').attr('height', '100%').attr('fill', 'url(#mesh-bg-dots)');
+
+    // Zoom
+    const zoom = d3.zoom()
+        .scaleExtent([0.2, 4])
+        .on('zoom', (event) => {
+            meshZoomTransform = event.transform;
+            if (meshSvgRoot) meshSvgRoot.attr('transform', event.transform);
+        });
+    svg.call(zoom);
+
+    // Root group
+    meshSvgRoot = svg.append('g');
+    meshSvgRoot.append('g').attr('class', 'mesh-rings');
+    meshSvgRoot.append('g').attr('class', 'mesh-links');
+    meshSvgRoot.append('g').attr('class', 'mesh-particles');
+    meshSvgRoot.append('g').attr('class', 'mesh-nodes');
+
+    // Force simulation
+    meshSim = d3.forceSimulation()
+        .force('link', d3.forceLink().id(d => d.id).distance(170).strength(0.4))
+        .force('charge', d3.forceManyBody().strength(-600))
+        .force('center', d3.forceCenter(w / 2, h / 2))
+        .force('collision', d3.forceCollide(42))
+        .alphaDecay(0.025)
+        .on('tick', meshD3Tick);
+
+    meshAnimLoop();
+    setInterval(updateMeshNodeList, 2000);
+}
+
+function meshResize() {
+    const svgEl = document.getElementById('meshSvg');
+    if (!svgEl) return;
+    const w = svgEl.clientWidth  || 600;
+    const h = svgEl.clientHeight || 400;
+    const cx = w / 2, cy = h / 2;
+
+    d3.select('#meshSvg').attr('width', w).attr('height', h);
+
+    if (meshSim) {
+        meshSim.force('center', d3.forceCenter(cx, cy));
+        // Fix gateway position
+        const gw = meshNodes.get(meshMyId);
+        if (gw) { gw.fx = cx; gw.fy = cy; }
+        meshSim.alpha(0.1).restart();
+    }
+}
+
+function meshD3Update() {
+    if (!meshSvgRoot || !meshSim) return;
+
+    const svgEl = document.getElementById('meshSvg');
+    const w  = svgEl ? (svgEl.clientWidth  || 600) : 600;
+    const h  = svgEl ? (svgEl.clientHeight || 400) : 400;
+    const cx = w / 2, cy = h / 2;
+
+    const nodesArr = [...meshNodes.values()];
+
+    // Fix gateway at center
+    const gw = meshNodes.get(meshMyId);
+    if (gw) { gw.fx = cx; gw.fy = cy; }
+
+    // Build links array for D3
+    const linksArr = [];
     meshLinks.forEach((link, key) => {
         const [aId, bId] = key.split('-').map(Number);
-        const a = meshNodes.get(aId), b = meshNodes.get(bId);
-        if (!a || !b) return;
-        const age = (now - link.lastActive) / 30000;
-        ctx.globalAlpha = Math.max(0.08, 1 - age) * 0.75;
-        ctx.strokeStyle = rssiColor(link.rssi || -100);
-        ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-        ctx.fillStyle = rssiColor(link.rssi || -100);
-        ctx.font = '10px Inter, sans-serif';
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(`${link.rssi} dBm`, (a.x + b.x) / 2, (a.y + b.y) / 2 - 9);
-        ctx.globalAlpha = 1;
+        linksArr.push({ source: aId, target: bId, rssi: link.rssi, lastActive: link.lastActive });
     });
 
-    const myNode = meshNodes.get(meshMyId);
-    meshNodes.forEach(n => {
-        if (n.id === meshMyId || n.hops === 0 || !myNode) return;
-        const age = (now - n.lastSeen) / 30000;
-        ctx.globalAlpha = Math.max(0.04, 1 - age) * 0.4;
-        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-        ctx.lineWidth = 1; ctx.setLineDash([4, 7]);
-        ctx.beginPath(); ctx.moveTo(n.x, n.y); ctx.lineTo(myNode.x, myNode.y); ctx.stroke();
-        ctx.setLineDash([]); ctx.globalAlpha = 1;
+    // Orbital rings
+    const ringsG = meshSvgRoot.select('.mesh-rings');
+    const ringRadii = [120, 200, 280];
+    const ringsSel = ringsG.selectAll('circle.orbit-ring').data(ringRadii);
+    ringsSel.enter().append('circle').attr('class', 'orbit-ring')
+        .merge(ringsSel)
+        .attr('cx', cx).attr('cy', cy)
+        .attr('r', d => d)
+        .attr('fill', 'none')
+        .attr('stroke', (d, i) => `rgba(255,255,255,${0.04 - i * 0.01})`)
+        .attr('stroke-width', 1)
+        .attr('stroke-dasharray', '3,8');
+    ringsSel.exit().remove();
+
+    // Links
+    const linksG  = meshSvgRoot.select('.mesh-links');
+    const linkSel = linksG.selectAll('g.link-group').data(linksArr, d => `${d.source}-${d.target}`);
+
+    const linkEnter = linkSel.enter().append('g').attr('class', 'link-group mesh-link');
+    linkEnter.append('line');
+    linkEnter.append('text')
+        .attr('font-family', "'Inter', sans-serif")
+        .attr('font-size', '10px')
+        .attr('fill', 'rgba(255,255,255,0.5)')
+        .attr('text-anchor', 'middle')
+        .attr('dominant-baseline', 'middle');
+
+    const linkMerge = linkEnter.merge(linkSel);
+    linkMerge.select('line')
+        .attr('stroke', d => rssiColor(d.rssi || -100))
+        .attr('stroke-width', d => (d.hops === 0 ? 2 : 1.5))
+        .attr('stroke-opacity', d => (d.hops === 0 ? 0.7 : 0.35))
+        .attr('stroke-dasharray', d => (d.hops === 0 ? null : '6,4'));
+    linkMerge.select('text')
+        .text(d => d.hops === 0 ? `${d.rssi} dBm` : `${d.hops}hop · ${d.rssi} dBm`);
+
+    linkSel.exit().remove();
+
+    // Nodes
+    const nodesG   = meshSvgRoot.select('.mesh-nodes');
+    const nodeSel  = nodesG.selectAll('g.mesh-node').data(nodesArr, d => d.id);
+
+    const nodeEnter = nodeSel.enter().append('g').attr('class', 'mesh-node');
+
+    // Glow circle (main)
+    nodeEnter.append('circle').attr('class', 'node-circle');
+    // Selection ring
+    nodeEnter.append('circle').attr('class', 'selection-ring')
+        .attr('fill', 'none')
+        .attr('stroke', 'white')
+        .attr('stroke-width', 2.5);
+    // Label text
+    nodeEnter.append('text').attr('class', 'node-label')
+        .attr('font-family', "'Inter', sans-serif")
+        .attr('font-weight', 'bold')
+        .attr('text-anchor', 'middle')
+        .attr('dominant-baseline', 'middle')
+        .attr('fill', 'white');
+    // Sublabel
+    nodeEnter.append('text').attr('class', 'node-sublabel')
+        .attr('font-family', "'Inter', sans-serif")
+        .attr('font-size', '10px')
+        .attr('text-anchor', 'middle')
+        .attr('dominant-baseline', 'middle')
+        .attr('fill', 'rgba(255,255,255,0.55)');
+
+    // Drag behavior
+    const drag = d3.drag()
+        .on('start', (event, d) => {
+            if (!event.active) meshSim.alphaTarget(0.3).restart();
+            d.fx = d.x; d.fy = d.y;
+        })
+        .on('drag', (event, d) => {
+            d.fx = event.x; d.fy = event.y;
+        })
+        .on('end', (event, d) => {
+            if (!event.active) meshSim.alphaTarget(0);
+            // Release fx/fy unless it's the gateway
+            if (d.id !== meshMyId) { d.fx = null; d.fy = null; }
+        });
+
+    nodeEnter.call(drag);
+
+    // Click to select destination
+    nodeEnter.on('click', (event, d) => {
+        if (d.id === meshMyId) return;
+        selectedDst = (selectedDst === d.id) ? 0 : d.id;
+        const sel = document.getElementById('meshDstSelect');
+        if (sel) sel.value = String(selectedDst);
+        meshD3Update();
     });
 
-    for (let i = meshParticles.length - 1; i >= 0; i--) {
-        const p = meshParticles[i];
-        p.t = (now - p.born) / 700;
-        if (p.t >= 1) { meshParticles.splice(i, 1); continue; }
-        const x = p.x0 + (p.x1 - p.x0) * p.t;
-        const y = p.y0 + (p.y1 - p.y0) * p.t;
-        ctx.globalAlpha = 1 - p.t;
-        ctx.shadowColor = p.color; ctx.shadowBlur = 14;
-        ctx.fillStyle = p.color;
-        ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill();
-        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
-    }
+    // Merge enter + update
+    const nodeMerge = nodeEnter.merge(nodeSel);
 
-    meshNodes.forEach(n => {
-        const isMe  = n.id === meshMyId;
-        const age   = (now - n.lastSeen) / 60000;
-        const alpha = Math.max(0.4, 1 - age * 0.5);
-        const color = isMe ? '#007aff' : (n.hops === 0 ? rssiColor(n.rssi || -80) : '#636366');
-        const r     = isMe ? 30 : 22;
+    nodeMerge.select('circle.node-circle')
+        .attr('r', d => d.id === meshMyId ? 28 : 20)
+        .attr('fill', d => d.id === meshMyId ? '#007aff' : rssiColor(d.rssi || -80))
+        .attr('filter', 'url(#node-glow)');
 
-        ctx.globalAlpha = alpha;
-        ctx.shadowColor = color; ctx.shadowBlur = isMe ? 28 : 16;
-        ctx.fillStyle = color;
-        ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2); ctx.fill();
-        ctx.shadowBlur = 0;
+    nodeMerge.select('circle.selection-ring')
+        .attr('r', d => d.id === meshMyId ? 36 : 28)
+        .attr('opacity', d => d.id === selectedDst ? 0.9 : 0);
 
-        if (isMe) {
-            ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 2;
-            ctx.beginPath(); ctx.arc(n.x, n.y, r + 7, 0, Math.PI * 2); ctx.stroke();
+    nodeMerge.select('text.node-label')
+        .attr('font-size', d => d.id === meshMyId ? '14px' : '12px')
+        .text(d => `N${d.id}`);
+
+    nodeMerge.select('text.node-sublabel')
+        .attr('dy', d => (d.id === meshMyId ? 28 : 20) + 14)
+        .text(d => d.id === meshMyId ? 'YOU' : (d.hops === 0 ? 'direct' : `${d.hops}h`));
+
+    nodeSel.exit().remove();
+
+    // Update simulation
+    meshSim.nodes(nodesArr);
+    meshSim.force('link').links(linksArr);
+    meshSim.alpha(0.3).restart();
+}
+
+function meshD3Tick() {
+    if (!meshSvgRoot) return;
+
+    // Update links
+    meshSvgRoot.select('.mesh-links').selectAll('g.link-group').each(function(d) {
+        const g    = d3.select(this);
+        const src  = typeof d.source === 'object' ? d.source : meshNodes.get(d.source);
+        const tgt  = typeof d.target === 'object' ? d.target : meshNodes.get(d.target);
+        if (!src || !tgt) return;
+        g.select('line')
+            .attr('x1', src.x).attr('y1', src.y)
+            .attr('x2', tgt.x).attr('y2', tgt.y);
+        g.select('text')
+            .attr('x', (src.x + tgt.x) / 2)
+            .attr('y', (src.y + tgt.y) / 2 - 9);
+    });
+
+    // Update nodes
+    meshSvgRoot.select('.mesh-nodes').selectAll('g.mesh-node')
+        .attr('transform', d => `translate(${d.x},${d.y})`);
+}
+
+function meshAnimLoop() {
+    // Animate particles each rAF frame
+    const particlesG = meshSvgRoot ? meshSvgRoot.select('.mesh-particles') : null;
+    if (particlesG) {
+        const now = Date.now();
+        // Remove expired particles
+        for (let i = meshParticles.length - 1; i >= 0; i--) {
+            const p = meshParticles[i];
+            const t = (now - p.born) / 700;
+            if (t >= 1) meshParticles.splice(i, 1);
         }
 
-        ctx.fillStyle = 'white';
-        ctx.font = `bold ${isMe ? 14 : 12}px Inter, sans-serif`;
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(`N${n.id}`, n.x, n.y);
-        ctx.fillStyle = 'rgba(255,255,255,0.55)';
-        ctx.font = '10px Inter, sans-serif';
-        ctx.fillText(isMe ? 'YOU' : (n.hops === 0 ? 'direct' : `${n.hops}h`), n.x, n.y + r + 14);
-        ctx.globalAlpha = 1;
-    });
+        // Data join for SVG circles
+        const circles = particlesG.selectAll('circle.mesh-pkt').data(meshParticles, d => d.id);
+
+        circles.enter().append('circle')
+            .attr('class', 'mesh-pkt')
+            .attr('r', 6)
+            .attr('filter', 'url(#pkt-glow)');
+
+        particlesG.selectAll('circle.mesh-pkt').each(function(d) {
+            const t       = (now - d.born) / 700;
+            const srcNode = meshNodes.get(d.srcId);
+            const dstNode = meshNodes.get(d.dstId);
+            if (!srcNode || !dstNode) return;
+            const x = srcNode.x + (dstNode.x - srcNode.x) * t;
+            const y = srcNode.y + (dstNode.y - srcNode.y) * t;
+            d3.select(this)
+                .attr('cx', x).attr('cy', y)
+                .attr('fill', d.color)
+                .attr('opacity', 1 - t);
+        });
+
+        circles.exit().remove();
+    }
+
+    requestAnimationFrame(meshAnimLoop);
 }
 
 function meshAddOrUpdate(id, hops, rssi, snr) {
-    const c  = document.getElementById('meshCanvas');
-    const cx = c ? c.width  / 2 : 300;
-    const cy = c ? c.height / 2 : 200;
+    const svgEl = document.getElementById('meshSvg');
+    const cx    = svgEl ? (svgEl.clientWidth  || 600) / 2 : 300;
+    const cy    = svgEl ? (svgEl.clientHeight || 400) / 2 : 200;
 
     if (!meshNodes.has(id)) {
         const angle = Math.random() * Math.PI * 2;
@@ -428,6 +569,8 @@ function meshAddOrUpdate(id, hops, rssi, snr) {
     const otherCount = [...meshNodes.keys()].filter(k => k !== meshMyId).length;
     document.getElementById('meshNodeCount').innerText = otherCount;
     updateMeshNodeList();
+    updateMeshDstSelect();
+    meshD3Update();
 }
 
 function updateMeshNodeList() {
@@ -451,6 +594,27 @@ function updateMeshNodeList() {
     });
 }
 
+function updateMeshDstSelect() {
+    const sel = document.getElementById('meshDstSelect');
+    if (!sel) return;
+    const current = sel.value;
+    sel.innerHTML = '<option value="0">→ All</option>';
+    meshNodes.forEach(n => {
+        if (n.id === meshMyId) return;
+        const opt = document.createElement('option');
+        opt.value = String(n.id);
+        opt.textContent = `→ N${n.id}`;
+        sel.appendChild(opt);
+    });
+    // Restore previous selection if still valid
+    if ([...sel.options].some(o => o.value === current)) {
+        sel.value = current;
+    } else {
+        sel.value = '0';
+        selectedDst = 0;
+    }
+}
+
 function handleMeshInfo(data) {
     // data = "NODE_ID:<n>" — nRF tells us its actual mesh NODE_ID on BLE connect
     const match = data.match(/^NODE_ID:(\d+)$/);
@@ -464,27 +628,30 @@ function handleMeshInfo(data) {
     meshMyId = nodeId;
     if (oldNode) { oldNode.id = meshMyId; meshNodes.set(meshMyId, oldNode); }
     else {
-        const c = document.getElementById('meshCanvas');
+        const svgEl = document.getElementById('meshSvg');
         meshNodes.set(meshMyId, {
             id: meshMyId, hops: 0, rssi: 0, snr: 0, msgCount: 0,
-            x: c ? c.clientWidth / 2 : 300, y: c ? c.clientHeight / 2 : 200,
+            x: svgEl ? svgEl.clientWidth  / 2 : 300,
+            y: svgEl ? svgEl.clientHeight / 2 : 200,
             vx: 0, vy: 0, lastSeen: Date.now()
         });
     }
     document.getElementById('meshMyNodeId').innerText = `Node ${meshMyId}`;
     log(`Gateway NODE_ID = ${meshMyId}`);
+    meshD3Update();
 }
 
 function handleMeshRx(data) {
-    // format: src|mid|ttl|rssi|snr|payload
+    // format: src|dst|mid|ttl|rssi|snr|payload
     const parts = data.split('|');
-    if (parts.length < 6) return;
+    if (parts.length < 7) return;
     const src     = parseInt(parts[0]);
-    const mid     = parseInt(parts[1]);
-    const ttl     = parseInt(parts[2]);
-    const rssi    = parseFloat(parts[3]);
-    const snr     = parseFloat(parts[4]);
-    const payload = parts.slice(5).join('|');
+    const dst     = parseInt(parts[1]);
+    const mid     = parseInt(parts[2]);
+    const ttl     = parseInt(parts[3]);
+    const rssi    = parseFloat(parts[4]);
+    const snr     = parseFloat(parts[5]);
+    const payload = parts.slice(6).join('|');
     const hops    = TTL_DEFAULT - ttl;
 
     meshMsgCount++;
@@ -492,19 +659,16 @@ function handleMeshRx(data) {
 
     meshAddOrUpdate(src, hops, rssi, snr);
 
-    if (hops === 0) {
-        meshLinks.set(`${src}-${meshMyId}`, { rssi, snr, lastActive: Date.now() });
-    }
+    meshLinks.set(`${src}-${meshMyId}`, { rssi, snr, hops, lastActive: Date.now() });
 
-    const srcNode = meshNodes.get(src);
-    const myNode  = meshNodes.get(meshMyId);
-    if (srcNode && myNode) {
-        meshParticles.push({
-            x0: srcNode.x, y0: srcNode.y,
-            x1: myNode.x,  y1: myNode.y,
-            color: rssiColor(rssi), born: Date.now(), t: 0
-        });
-    }
+    // Particle from src to my node
+    meshParticles.push({
+        id: _particleId++,
+        srcId: src,
+        dstId: meshMyId,
+        color: rssiColor(rssi),
+        born: Date.now()
+    });
 
     const hopStr = hops === 0 ? 'direct' : `${hops} hop${hops > 1 ? 's' : ''}`;
     addMeshLog(`N${src} [${hopStr}] RSSI:${rssi} SNR:${snr}  "${payload}"`, 'rx');
@@ -528,10 +692,13 @@ function handleMeshRx(data) {
 }
 
 function handleMeshTx(data) {
-    const parts   = data.split('|');
-    if (parts.length < 4) return;
-    const payload = parts.slice(3).join('|');
-    addMeshLog(`→ TX broadcast  "${payload}"`, 'tx');
+    // format: src|dst|mid|ttl|payload
+    const parts = data.split('|');
+    if (parts.length < 5) return;
+    const dst     = parts[1];
+    const payload = parts.slice(4).join('|');
+    const dstLabel = dst === '0' ? 'broadcast' : `→ N${dst}`;
+    addMeshLog(`→ TX [${dstLabel}] "${payload}"`, 'tx');
 }
 
 function addMeshLog(msg, type) {
@@ -550,51 +717,103 @@ async function sendMesh() {
     const input = document.getElementById('meshMsgInput');
     if (!input || !input.value.trim()) return;
     const msg = input.value.trim();
+    const sel = document.getElementById('meshDstSelect');
+    const dst = sel ? sel.value : '0';
     input.value = '';
-    addMeshLog(`→ TX  "${msg}"`, 'tx');
+
     addChatBubble(msg, 'out');
     loraCsvRows.push([new Date().toISOString(), "TX", msg, "", "", ""]);
-    await send('SEND_MESH:' + msg);
+
+    if (dst === '0') {
+        await send('SEND_MESH:' + msg);
+    } else {
+        await send(`SEND_NODE:${dst}:${msg}`);
+    }
+}
+
+// =============================================
+// SERIAL (ESP32)
+// =============================================
+async function connectSerial() {
+    if (!navigator.serial) { log('Web Serial requires Chrome 89+'); return; }
+    try {
+        _serialPort = await navigator.serial.requestPort();
+        await _serialPort.open({ baudRate: 115200 });
+        const enc = new TextEncoderStream();
+        enc.readable.pipeTo(_serialPort.writable);
+        _serialWriter = enc.writable.getWriter();
+        document.getElementById('serialSendRow').style.display = 'flex';
+        document.getElementById('serialBtn').textContent = 'Disconnect Serial';
+        document.getElementById('serialBtn').onclick = disconnectSerial;
+        log('ESP32 serial connected');
+    } catch (e) {
+        if (e.name !== 'NotFoundError') log('Serial error: ' + e.message);
+    }
+}
+
+async function disconnectSerial() {
+    try {
+        if (_serialWriter) { await _serialWriter.close(); _serialWriter = null; }
+        if (_serialPort)   { await _serialPort.close();  _serialPort   = null; }
+    } catch (e) { /* ignore */ }
+    document.getElementById('serialSendRow').style.display = 'none';
+    const btn = document.getElementById('serialBtn');
+    if (btn) { btn.textContent = 'Connect Serial'; btn.onclick = connectSerial; }
+    log('ESP32 serial disconnected');
+}
+
+async function sendSerial(msg) {
+    const input = document.getElementById('serialInput');
+    const text  = msg !== undefined ? msg : (input ? input.value.trim() : '');
+    if (!text || !_serialWriter) return;
+    try {
+        await _serialWriter.write(text + '\n');
+        addMeshLog(`→ ESP32 serial: "${text}"`, 'tx');
+        if (input) input.value = '';
+    } catch (e) {
+        log('Serial write error: ' + e.message);
+    }
 }
 
 // =============================================
 // FIRMWARE FLASH
 // =============================================
 async function flashDevice(board) {
-    if (!window.showOpenFilePicker || !window.showDirectoryPicker) {
+    if (!window.showDirectoryPicker) {
         log('Flash requires Chrome 86+ with File System Access API.');
         return;
     }
 
+    const nodeId   = parseInt(document.getElementById('flashNodeId').value) || 1;
     const label    = board === 'nrf' ? 'nRF52840' : 'ESP32-S3';
-    const hint     = board === 'nrf' ? 'code_nrf.py' : 'code_esp32.py';
+    const srcFile  = board === 'nrf' ? 'code_nrf.py' : 'code_esp32.py';
     const btns     = document.querySelectorAll('.btn-flash');
     btns.forEach(b => b.classList.add('flashing'));
 
     try {
-        // Step 1 — pick the source firmware file
-        log(`[Flash ${label}] Select ${hint}…`);
-        const [srcHandle] = await window.showOpenFilePicker({
-            id: 'firmware-src',
-            types: [{ description: 'CircuitPython firmware', accept: { 'text/x-python': ['.py'] } }],
-        });
-        const srcFile = await srcHandle.getFile();
-        const content = await srcFile.text();
-        log(`[Flash ${label}] ${srcFile.name} loaded (${content.length} bytes) — now select CIRCUITPY drive…`);
+        // Fetch bundled source code (same repo, one level up)
+        log(`[Flash ${label}] Loading firmware (Node ID = ${nodeId})…`);
+        const resp = await fetch(srcFile);
+        if (!resp.ok) throw new Error(`Could not load ${srcFile} (${resp.status})`);
+        let content = await resp.text();
 
-        // Step 2 — pick the destination CIRCUITPY drive root
+        // Inject the chosen NODE_ID
+        content = content.replace(/^NODE_ID\s*=\s*\d+/m, `NODE_ID   = ${nodeId}`);
+
+        // Pick the destination CIRCUITPY drive root
+        log(`[Flash ${label}] Select the CIRCUITPY drive…`);
         const destDir = await window.showDirectoryPicker({
             id: 'circuitpy-' + board,
             mode: 'readwrite',
         });
 
-        // Step 3 — write as code.py
+        // Write as code.py
         const destHandle = await destDir.getFileHandle('code.py', { create: true });
         const writable   = await destHandle.createWritable();
         await writable.write(content);
         await writable.close();
 
-        log(`✓ ${label} flashed → ${destDir.name}/code.py  (board will restart)`);
+        log(`✓ ${label} (Node ${nodeId}) → ${destDir.name}/code.py  (board will restart)`);
     } catch (e) {
         if (e.name !== 'AbortError') log(`Flash error: ${e.message}`);
     } finally {
@@ -606,14 +825,14 @@ async function flashDevice(board) {
 // PARROT TESTS
 // =============================================
 async function parrotTest() {
-    if (!ctrlChar) { log("Not connected"); return; }
+    if (!writeChar) { log("Not connected"); return; }
     const tag = Date.now() % 10000;
     log(`BLE parrot → sending PARROT:${tag} …`);
     await send(`PARROT:${tag}`);
 }
 
 async function loraParrotTest() {
-    if (!ctrlChar) { log("Not connected"); return; }
+    if (!writeChar) { log("Not connected"); return; }
     const tag = Date.now() % 10000;
     log(`LoRa parrot → sending PARROT:${tag} over mesh …`);
     await send(`SEND_MESH:PARROT:${tag}`);

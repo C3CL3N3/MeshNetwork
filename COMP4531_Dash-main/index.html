@@ -60,6 +60,10 @@
 
                 <div class="flash-section">
                     <div class="flash-label">Flash Firmware</div>
+                    <div class="flash-node-row">
+                        <label class="flash-node-label">Node ID</label>
+                        <input type="number" id="flashNodeId" value="1" min="1" max="255" class="flash-node-input">
+                    </div>
                     <div class="action-row" style="margin-bottom:0;">
                         <button class="btn-flash" onclick="flashDevice('nrf')">
                             <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="margin-right:6px">
@@ -74,7 +78,7 @@
                             Flash ESP32
                         </button>
                     </div>
-                    <p class="flash-hint">Pick the firmware .py file, then select the CIRCUITPY drive.</p>
+                    <p class="flash-hint">Set the Node ID, then select the CIRCUITPY drive.</p>
                 </div>
             </div>
         </section>
@@ -141,8 +145,11 @@
                     </div>
                 </div>
 
-                <div class="mesh-send-row">
-                    <input type="text" id="meshMsgInput" placeholder="Broadcast message…"
+                <div class="mesh-compose">
+                    <select id="meshDstSelect">
+                        <option value="0">→ All</option>
+                    </select>
+                    <input type="text" id="meshMsgInput" placeholder="Message…"
                            onkeydown="if(event.key==='Enter') sendMesh()">
                     <button class="btn-primary small" onclick="sendMesh()">Send</button>
                 </div>
@@ -151,16 +158,27 @@
                     <div class="mesh-section-label">Discovered Nodes</div>
                     <div id="meshNodeList"></div>
                 </div>
+
+                <div class="mesh-serial">
+                    <div class="mesh-section-label" style="margin-top:16px;">ESP32 Serial</div>
+                    <button class="btn-secondary small" id="serialBtn" onclick="connectSerial()">Connect Serial</button>
+                    <div class="mesh-send-row" id="serialSendRow" style="display:none; margin-top:8px;">
+                        <input type="text" id="serialInput" placeholder="Send via ESP32…"
+                               onkeydown="if(event.key==='Enter') sendSerial()">
+                        <button class="btn-primary small" onclick="sendSerial()">TX</button>
+                    </div>
+                </div>
             </aside>
 
             <main class="mesh-main">
-                <canvas id="meshCanvas"></canvas>
+                <div id="meshViz"><svg id="meshSvg"></svg></div>
                 <div id="meshLog"></div>
             </main>
         </section>
 
     </div>
 
+    <script src="https://d3js.org/d3.v7.min.js"></script>
     <script src="script.js"></script>
 </body>
 
