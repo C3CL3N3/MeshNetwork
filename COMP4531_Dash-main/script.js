@@ -873,6 +873,21 @@ async function sendMesh() {
     }
 }
 
+async function sendServo() {
+    if (!writeChar) { log('Not connected'); return; }
+    const id    = parseInt(document.getElementById('servoId').value) || 1;
+    const angle = parseInt(document.getElementById('servoSlider').value);
+    const sel   = document.getElementById('meshDstSelect');
+    const dst   = sel ? sel.value : '0';
+    const msg   = `SERVO:${id}:${angle}`;
+    log(`→ SERVO N${id} @ ${angle}° → dst ${dst === '0' ? 'broadcast' : `N${dst}`}`);
+    if (dst === '0') {
+        await send('SEND_MESH:' + msg);
+    } else {
+        await send(`SEND_NODE:${dst}:${msg}`);
+    }
+}
+
 // =============================================
 // SERIAL (ESP32)
 // =============================================
@@ -1058,24 +1073,27 @@ async function flashDevice(board) {
         // ── Fetch firmware files ───────────────────────────────────────────────
         const varLabel = useEcho ? 'echo_node' : 'standard';
         log(`[Flash ${label}] Fetching firmware (Node ID = ${nodeId}${useEcho ? ', ' + varLabel : ''})…`);
-        const [codeResp, commonResp, sx1262Resp, bootResp, loggerResp] = await Promise.all([
+        const [codeResp, commonResp, sx1262Resp, bootResp, loggerResp, scservoResp] = await Promise.all([
             fetch(codeFile),
             fetch('mesh_common.py'),
             fetch('sx1262.py'),
             fetch('boot.py'),
             fetch('logger.py'),
+            fetch('scservo.py'),
         ]);
-        if (!codeResp.ok)   throw new Error(`Cannot fetch ${codeFile} (${codeResp.status})`);
-        if (!commonResp.ok) throw new Error(`Cannot fetch mesh_common.py (${commonResp.status})`);
-        if (!sx1262Resp.ok) throw new Error(`Cannot fetch sx1262.py (${sx1262Resp.status})`);
-        if (!bootResp.ok)   throw new Error(`Cannot fetch boot.py (${bootResp.status})`);
-        if (!loggerResp.ok) throw new Error(`Cannot fetch logger.py (${loggerResp.status})`);
+        if (!codeResp.ok)    throw new Error(`Cannot fetch ${codeFile} (${codeResp.status})`);
+        if (!commonResp.ok)  throw new Error(`Cannot fetch mesh_common.py (${commonResp.status})`);
+        if (!sx1262Resp.ok)  throw new Error(`Cannot fetch sx1262.py (${sx1262Resp.status})`);
+        if (!bootResp.ok)    throw new Error(`Cannot fetch boot.py (${bootResp.status})`);
+        if (!loggerResp.ok)  throw new Error(`Cannot fetch logger.py (${loggerResp.status})`);
+        if (!scservoResp.ok) throw new Error(`Cannot fetch scservo.py (${scservoResp.status})`);
 
         let codeContent      = await codeResp.text();
         const commonContent  = await commonResp.text();
         const sx1262Content  = await sx1262Resp.text();
         const bootContent    = await bootResp.text();
         const loggerContent  = await loggerResp.text();
+        const scservoContent = await scservoResp.text();
 
         // Inject chosen NODE_ID
         codeContent = codeContent.replace(/^NODE_ID\s*=\s*\d+/m, `NODE_ID = ${nodeId}`);
@@ -1106,6 +1124,7 @@ async function flashDevice(board) {
         await writeFile(destDir, 'boot.py', bootContent);
         await writeFile(destDir, 'logger.py', loggerContent);
         await writeFile(destDir, 'sx1262.py', sx1262Content);
+        await writeFile(destDir, 'scservo.py', scservoContent);
         await writeFile(destDir, 'mesh_common.py', commonContent);
         await writeFile(destDir, 'code.py', codeContent);
 

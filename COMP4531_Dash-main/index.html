@@ -254,6 +254,20 @@
             <div class="mesh-section-label">discovered_nodes</div>
             <div id="meshNodeList" style="margin-bottom:16px; flex:1; min-height:0; overflow-y:auto;"></div>
 
+            <hr class="md-divider" data-label="servo_control" style="margin-bottom:12px;">
+
+            <div class="mesh-compose" style="margin-bottom:4px; gap:6px;">
+                <label style="font-size:11px;white-space:nowrap;">id</label>
+                <input type="number" id="servoId" value="1" min="1" max="253"
+                       style="width:44px; padding:4px 6px; font-size:12px;">
+                <label style="font-size:11px;white-space:nowrap;">angle</label>
+                <input type="range" id="servoSlider" min="0" max="300" value="150" step="1"
+                       style="flex:1;" oninput="document.getElementById('servoAngleLbl').innerText=this.value+'°'">
+                <span id="servoAngleLbl" style="font-size:11px;min-width:32px;">150°</span>
+                <button class="btn-primary small" onclick="sendServo()">GO</button>
+            </div>
+            <p class="flash-hint" style="margin-bottom:12px;">// sends SERVO:&lt;id&gt;:&lt;angle&gt; to selected destination</p>
+
             <hr class="md-divider" data-label="esp32_serial" style="margin-bottom:12px;">
 
             <button class="btn-secondary small" id="serialBtn" onclick="connectSerial()" style="margin-bottom:8px;">connect_serial</button>

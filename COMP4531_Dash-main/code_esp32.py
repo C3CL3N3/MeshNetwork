@@ -6,6 +6,11 @@
 # Serial commands:
 #   <text>              → broadcast DATA (dst=0)
 #   TO:<dst>:<text>     → unicast DATA to node dst
+#
+# Mesh payload commands (received by this node):
+#   SERVO:<angle>           move servo ID 1 to angle (degrees, 0-300)
+#   SERVO:<id>:<angle>      move specific servo ID
+#   SERVO:<id>:<angle>:<ms> move with time budget in ms
 
 import time
 import random
@@ -18,6 +23,15 @@ import sys
 import mesh_common as mc
 from sx1262 import SX1262
 import logger
+
+# ── Optional servo (Bus Servo Driver Board: TX=D7, RX=D6) ────────────────────
+_servo = None
+try:
+    from scservo import SCServo
+    _servo = SCServo()
+    print("Servo bus OK")
+except Exception as _e:
+    print("Servo bus not found: {}".format(_e))
 
 # ── Identity ──────────────────────────────────────────────────────────────────
 NODE_ID = 2  # unique per physical board (1–255); 1 is reserved for nRF gateway
@@ -176,9 +190,31 @@ def _handle_data(pkt, rssi, snr):
     _lora_tx_lbt(mc.encode_data(src, dst, new_nh, mid, ttl - 1, payload))
     print("  -> relay to N{}".format(new_nh))
 
+def _servo_cmd(args):
+    """Parse SERVO:<angle> or SERVO:<id>:<angle> or SERVO:<id>:<angle>:<ms>"""
+    if _servo is None:
+        print("  servo not connected")
+        return
+    try:
+        parts = args.split(":")
+        if len(parts) == 1:
+            sid, angle, ms = 1, float(parts[0]), 0
+        elif len(parts) == 2:
+            sid, angle, ms = int(parts[0]), float(parts[1]), 0
+        else:
+            sid, angle, ms = int(parts[0]), float(parts[1]), int(parts[2])
+        _servo.write_angle(sid, angle, move_time=ms)
+        print("  SERVO id={} angle={} ms={}".format(sid, angle, ms))
+        logger.log("SERVO id={} angle={} ms={}".format(sid, angle, ms))
+    except Exception as e:
+        print("  servo_cmd err: {}".format(e))
+
 def _deliver(src, dst, payload):
     print("  v DELIVER from N{}: '{}'".format(src, payload))
     logger.log("RX src={} dst={} '{}'".format(src, dst, payload))
+    if payload.startswith("SERVO:"):
+        _servo_cmd(payload[6:])
+        return
     if payload.startswith("PARROT:"):
         time.sleep(0.15)
         send_data(src, "PONG:{}:{}".format(NODE_ID, payload[7:]))
