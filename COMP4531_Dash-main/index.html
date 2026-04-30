@@ -1,185 +1,278 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>COMP 4531 IoT Lab</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <title>lora_mesh_dashboard</title>
     <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
+<div class="app-container">
 
-    <div class="bg-orb orb-1"></div>
-    <div class="bg-orb orb-2"></div>
+    <!-- ── top bar ───────────────────────────────────────────────────────────── -->
+    <header class="glass-bar">
+        <div class="brand">
+            <span class="logo-icon">COMP4531</span>
+            <span class="brand-sep">/</span>
+            <span class="brand-name">lora_mesh_dashboard</span>
+        </div>
+        <nav class="segmented-control">
+            <button class="nav-btn active" onclick="setTab('home')">connect</button>
+            <button class="nav-btn" onclick="setTab('lora')">lora</button>
+            <button class="nav-btn" onclick="setTab('mesh')">mesh</button>
+            <button class="nav-btn" onclick="setTab('sim')">sim</button>
+        </nav>
+    </header>
 
-    <div class="app-container">
+    <!-- ── connect ───────────────────────────────────────────────────────────── -->
+    <section id="view-home" class="view-section active" style="justify-content:center;">
+        <div class="card center-card">
 
-        <header class="glass-bar">
-            <div class="brand">
-                <div class="logo-icon">COMP 4531</div>
-                <span>IoT and Smart Sensing</span>
+            <h1 class="card-title">connection_setup</h1>
+            <p class="card-sub">pair with your nRF52840 gateway over BLE</p>
+
+            <div class="field">
+                <label>group_id</label>
+                <input type="number" id="gid" value="" min="1" max="30" placeholder="1–30">
             </div>
-            <nav class="segmented-control">
-                <button class="nav-btn active" onclick="setTab('home')">Connect</button>
-                <button class="nav-btn" onclick="setTab('lora')">LoRa</button>
-                <button class="nav-btn" onclick="setTab('mesh')">Mesh</button>
-            </nav>
-        </header>
 
-        <!-- ══ CONNECT ══════════════════════════════════════════════════════ -->
-        <section id="view-home" class="view-section active">
-            <div class="card center-card">
-                <h2>Connection Setup</h2>
-                <p class="subtitle">Enter your group number to pair with your device.</p>
-
-                <div class="input-group">
-                    <label>Group ID</label>
-                    <input type="number" id="gid" value="" min="1" max="30">
-                </div>
-
-                <div class="action-row">
-                    <button id="conBtn" class="btn-primary" onclick="connect()">Connect</button>
-                    <button id="disBtn" class="btn-destructive" onclick="disconnect()" disabled>Disconnect</button>
-                </div>
-
-                <div class="status-indicator">
-                    <div id="statusDot" class="dot"></div>
-                    <span id="connStatus">Disconnected</span>
-                </div>
-
-                <div class="terminal-window">
-                    <div id="terminal">System Ready...</div>
-                </div>
-
-                <div class="action-row" style="margin-top:16px; margin-bottom:0;">
-                    <button class="btn-secondary" onclick="parrotTest()">BLE Parrot</button>
-                    <button class="btn-secondary" onclick="loraParrotTest()">LoRa Parrot</button>
-                </div>
-
-                <div class="flash-section">
-                    <div class="flash-label">Flash Firmware</div>
-                    <div class="flash-node-row">
-                        <label class="flash-node-label">Node ID</label>
-                        <input type="number" id="flashNodeId" value="1" min="1" max="255" class="flash-node-input">
-                    </div>
-                    <div class="action-row" style="margin-bottom:0;">
-                        <button class="btn-flash" onclick="flashDevice('nrf')">
-                            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="margin-right:6px">
-                                <path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
-                            </svg>
-                            Flash nRF
-                        </button>
-                        <button class="btn-flash" onclick="flashDevice('esp32')">
-                            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="margin-right:6px">
-                                <path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
-                            </svg>
-                            Flash ESP32
-                        </button>
-                    </div>
-                    <p class="flash-hint">Set the Node ID, then select the CIRCUITPY drive.</p>
-                </div>
+            <div class="action-row">
+                <button id="conBtn" class="btn-primary" onclick="connect()">connect</button>
+                <button id="disBtn" class="btn-danger" onclick="disconnect()" disabled>disconnect</button>
             </div>
-        </section>
 
-        <!-- ══ LORA ══════════════════════════════════════════════════════════ -->
-        <section id="view-lora" class="view-section">
-            <div class="card chat-card">
-                <div class="card-header">
-                    <h3>LoRa Messenger</h3>
-                    <span id="loraBadge" class="badge">--- MHz</span>
+            <div class="status-line">
+                <div id="statusDot" class="dot"></div>
+                <span id="connStatus">disconnected</span>
+            </div>
+
+            <div class="code-block" id="terminal"><!-- system ready --></div>
+
+            <hr class="md-divider" data-label="flash_firmware">
+
+            <div class="flash-section">
+                <div class="flash-node-row">
+                    <span class="flash-node-label">node_id</span>
+                    <input type="number" id="flashNodeId" value="2" min="1" max="255" class="flash-node-input">
                 </div>
-
-                <div class="lora-controls">
-                    <button class="btn-secondary small" onclick="downloadLoraCSV()">Download CSV</button>
-                </div>
-
-                <div id="loraGraphPanel" style="display:none; padding:16px; border-bottom:1px solid rgba(0,0,0,0.06); background:rgba(245,245,247,0.4);">
-                    <div class="graph-card" style="box-shadow:none; border:1px solid rgba(0,0,0,0.1);">
-                        <div class="graph-header">
-                            <span>Signal Strength vs Distance</span>
-                            <div class="legend">
-                                <span class="dot" style="background:var(--primary)"></span>LoRa
-                            </div>
-                        </div>
-                        <canvas id="loraChartCanvas" style="height:140px; background:transparent;"></canvas>
+                <!-- esp32 variant toggle -->
+                <div class="flash-variant-row">
+                    <span class="flash-node-label">esp32_fw</span>
+                    <div class="variant-ctrl">
+                        <button id="varBtnStd"  class="var-btn active" onclick="setEsp32Variant('standard',this)">standard</button>
+                        <button id="varBtnEcho" class="var-btn"        onclick="setEsp32Variant('echo',this)">echo_node</button>
                     </div>
                 </div>
+                <p class="flash-hint" id="esp32FwHint" style="margin-bottom:8px;">// relay node — participates in mesh routing</p>
 
-                <div id="loraChat" class="chat-area">
-                    <div class="chat-placeholder">No messages yet…</div>
-                </div>
-                <div class="chat-input-area">
-                    <input type="text" id="loraTxt" placeholder="Send '1 meter', '5m', etc. to plot…">
-                    <button class="btn-send" onclick="sendLoRa()">
-                        <svg viewBox="0 0 24 24" width="20" height="20" fill="white">
-                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                <div class="action-row" style="margin-bottom:8px;">
+                    <button class="btn-flash" id="btnFlashNrf" onclick="flashDevice('nrf')">
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style="margin-right:5px">
+                            <path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
                         </svg>
+                        flash nrf52840
+                    </button>
+                    <button class="btn-flash" id="btnFlashEsp" onclick="flashDevice('esp32')">
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style="margin-right:5px">
+                            <path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
+                        </svg>
+                        flash esp32_s3
                     </button>
                 </div>
+                <div class="flash-drives">
+                    <div class="flash-drive-row">
+                        <span class="flash-drive-label">nrf_drive:</span>
+                        <span class="flash-drive-name" id="driveName-nrf">–</span>
+                        <button class="btn-forget" id="forgetBtn-nrf" onclick="forgetDrive('nrf')" style="display:none">✕</button>
+                    </div>
+                    <div class="flash-drive-row">
+                        <span class="flash-drive-label">esp32_drive:</span>
+                        <span class="flash-drive-name" id="driveName-esp32">–</span>
+                        <button class="btn-forget" id="forgetBtn-esp32" onclick="forgetDrive('esp32')" style="display:none">✕</button>
+                    </div>
+                </div>
+                <p class="flash-hint">// first flash: pick CIRCUITPY drive once — auto after</p>
+
+                <hr class="md-divider" data-label="node_log">
+                <div class="action-row" style="gap:6px;margin-top:4px;">
+                    <button class="btn-secondary" onclick="downloadLog('nrf')"  >↓ log · nrf</button>
+                    <button class="btn-secondary" onclick="downloadLog('esp32')">↓ log · esp32</button>
+                </div>
+                <p class="flash-hint">// logging active after flash — double-tap reset → safe mode to re-flash</p>
             </div>
-        </section>
+        </div>
+    </section>
 
-        <!-- ══ MESH NETWORK ══════════════════════════════════════════════════ -->
-        <section id="view-mesh" class="view-section">
-            <aside class="glass-sidebar">
-                <h3 style="margin:0 0 20px; font-size:18px; letter-spacing:-0.02em;">Mesh Network</h3>
-
-                <div class="stats-container">
-                    <div class="stat-item">
-                        <span class="label">My Node</span>
-                        <span class="value" id="meshMyNodeId">—</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="label">Frequency</span>
-                        <span class="value" id="meshFreq">— MHz</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="label">Nodes Seen</span>
-                        <span class="value" id="meshNodeCount">0</span>
-                    </div>
-                    <div class="stat-item highlight">
-                        <span class="label">Messages</span>
-                        <span class="value" id="meshMsgCount">0</span>
-                    </div>
+    <!-- ── lora ──────────────────────────────────────────────────────────────── -->
+    <section id="view-lora" class="view-section">
+        <div class="lora-card">
+            <div class="card-header">
+                <span class="card-header-title">lora_messenger</span>
+                <span id="loraBadge" class="badge">--- MHz</span>
+            </div>
+            <div class="lora-controls">
+                <button class="btn-secondary small" onclick="downloadLoraCSV()">↓ export_csv</button>
+            </div>
+            <div id="loraGraphPanel" style="display:none;">
+                <div class="graph-header">
+                    <span>rssi_vs_distance</span>
+                    <span id="loraGraphPoints" style="color:var(--text-muted)">0 pts</span>
                 </div>
+                <canvas id="loraChartCanvas" style="height:120px; width:100%; display:block;"></canvas>
+            </div>
+            <div id="loraChat" class="chat-area">
+                <div class="chat-placeholder">// no messages yet</div>
+            </div>
+            <div class="chat-input-area">
+                <input type="text" id="loraTxt" placeholder="type '1m', '5 meters'… to plot RSSI">
+                <button class="btn-send" onclick="sendLoRa()">send</button>
+            </div>
+        </div>
+    </section>
 
-                <div class="mesh-compose">
-                    <select id="meshDstSelect">
-                        <option value="0">→ All</option>
-                    </select>
-                    <input type="text" id="meshMsgInput" placeholder="Message…"
-                           onkeydown="if(event.key==='Enter') sendMesh()">
-                    <button class="btn-primary small" onclick="sendMesh()">Send</button>
+    <!-- ── sim ───────────────────────────────────────────────────────────────── -->
+    <section id="view-sim" class="view-section">
+        <aside class="glass-sidebar">
+            <h2 class="sidebar-title">sim_scenario</h2>
+            <p class="sidebar-sub">friis path loss · bellman-ford routing · network SF</p>
+
+            <div class="sim-group">
+                <label class="sim-label">nodes <span class="sim-val" id="simNodeCountVal">6</span></label>
+                <input type="range" id="simNodeCount" min="2" max="20" value="6"
+                       oninput="document.getElementById('simNodeCountVal').textContent=this.value">
+            </div>
+
+            <div class="sim-group">
+                <label class="sim-label">topology</label>
+                <select id="simTopology">
+                    <option value="random">random</option>
+                    <option value="grid">grid</option>
+                    <option value="line">line</option>
+                    <option value="ring">ring</option>
+                    <option value="star">star</option>
+                </select>
+            </div>
+
+            <div class="sim-group">
+                <label class="sim-label">area <span class="sim-val" id="simAreaVal">1000m</span></label>
+                <input type="range" id="simArea" min="100" max="5000" step="100" value="1000"
+                       oninput="document.getElementById('simAreaVal').textContent=this.value+'m'">
+            </div>
+
+            <div class="sim-group">
+                <label class="sim-label">environment</label>
+                <select id="simEnv">
+                    <option value="2.0:0">free_space (n=2.0)</option>
+                    <option value="2.7:6">suburban (n=2.7)</option>
+                    <option value="3.5:8" selected>urban (n=3.5)</option>
+                    <option value="4.0:10">indoor (n=4.0)</option>
+                    <option value="4.5:12">dense_urban (n=4.5)</option>
+                </select>
+            </div>
+
+            <div class="sim-group">
+                <label class="sim-label">tx_power</label>
+                <select id="simTxPower">
+                    <option value="14">14 dBm</option>
+                    <option value="17">17 dBm</option>
+                    <option value="20">20 dBm</option>
+                    <option value="22" selected>22 dBm</option>
+                </select>
+            </div>
+
+            <div class="sim-group">
+                <label class="sim-label">interference <span class="sim-val" id="simInterferenceVal">0%</span></label>
+                <input type="range" id="simInterference" min="0" max="80" value="0"
+                       oninput="document.getElementById('simInterferenceVal').textContent=this.value+'%'">
+            </div>
+
+            <div class="sim-group">
+                <label class="sim-label">node_failure <span class="sim-val" id="simFailureVal">0%</span></label>
+                <input type="range" id="simFailure" min="0" max="50" value="0"
+                       oninput="document.getElementById('simFailureVal').textContent=this.value+'%'">
+            </div>
+
+            <button class="btn-primary" style="margin:10px 0 6px; width:100%;" onclick="simGenerate()">↺ generate</button>
+
+            <hr class="md-divider" data-label="send_packet" style="margin:10px 0 12px;">
+
+            <div class="sim-group">
+                <label class="sim-label">from → to</label>
+                <div style="display:flex; gap:6px; align-items:center;">
+                    <select id="simSrc" class="sim-select-inline"></select>
+                    <span style="color:var(--text-muted);">→</span>
+                    <select id="simDst" class="sim-select-inline"></select>
                 </div>
+            </div>
 
-                <div class="mesh-node-section">
-                    <div class="mesh-section-label">Discovered Nodes</div>
-                    <div id="meshNodeList"></div>
-                </div>
+            <div class="sim-group">
+                <label class="sim-label">mode</label>
+                <select id="simMode">
+                    <option value="routed">routed_mesh</option>
+                    <option value="flood">naive_flood</option>
+                    <option value="direct">direct_SF12</option>
+                    <option value="compare">compare_all</option>
+                </select>
+            </div>
 
-                <div class="mesh-serial">
-                    <div class="mesh-section-label" style="margin-top:16px;">ESP32 Serial</div>
-                    <button class="btn-secondary small" id="serialBtn" onclick="connectSerial()">Connect Serial</button>
-                    <div class="mesh-send-row" id="serialSendRow" style="display:none; margin-top:8px;">
-                        <input type="text" id="serialInput" placeholder="Send via ESP32…"
-                               onkeydown="if(event.key==='Enter') sendSerial()">
-                        <button class="btn-primary small" onclick="sendSerial()">TX</button>
-                    </div>
-                </div>
-            </aside>
+            <button class="btn-secondary small" style="width:100%; margin-top:6px;"
+                    onclick="simSendPacket()">↑ simulate_packet</button>
 
-            <main class="mesh-main">
-                <div id="meshViz"><svg id="meshSvg"></svg></div>
-                <div id="meshLog"></div>
-            </main>
-        </section>
+            <div id="simPacketResult" class="sim-packet-result"></div>
+        </aside>
 
-    </div>
+        <main class="sim-main">
+            <div id="simViz"><svg id="simSvg"></svg></div>
+            <div id="simResults"></div>
+        </main>
+    </section>
 
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <script src="script.js"></script>
+    <!-- ── mesh ──────────────────────────────────────────────────────────────── -->
+    <section id="view-mesh" class="view-section">
+        <aside class="glass-sidebar">
+            <h2 class="sidebar-title">mesh_network</h2>
+            <p class="sidebar-sub">adaptive spreading factor · distance-vector routing</p>
+
+            <table class="stats-table" style="margin-bottom:16px;">
+                <tr><td>my_node</td><td id="meshMyNodeId">—</td></tr>
+                <tr><td>network_sf</td><td id="meshNetSf">—</td></tr>
+                <tr><td>nodes_seen</td><td id="meshNodeCount">0</td></tr>
+                <tr><td>msg_count</td><td id="meshMsgCount">0</td></tr>
+            </table>
+
+            <hr class="md-divider" data-label="send" style="margin-bottom:12px;">
+
+            <div class="mesh-compose" style="margin-bottom:16px;">
+                <select id="meshDstSelect">
+                    <option value="0">broadcast</option>
+                </select>
+                <input type="text" id="meshMsgInput" placeholder="message…"
+                       onkeydown="if(event.key==='Enter') sendMesh()">
+                <button class="btn-primary small" onclick="sendMesh()">↑</button>
+            </div>
+
+            <div class="mesh-section-label">discovered_nodes</div>
+            <div id="meshNodeList" style="margin-bottom:16px; flex:1; min-height:0; overflow-y:auto;"></div>
+
+            <hr class="md-divider" data-label="esp32_serial" style="margin-bottom:12px;">
+
+            <button class="btn-secondary small" id="serialBtn" onclick="connectSerial()" style="margin-bottom:8px;">connect_serial</button>
+            <div class="mesh-send-row" id="serialSendRow" style="display:none;">
+                <input type="text" id="serialInput" placeholder="send via esp32…"
+                       onkeydown="if(event.key==='Enter') sendSerial()">
+                <button class="btn-primary small" onclick="sendSerial()">TX</button>
+            </div>
+        </aside>
+
+        <main class="mesh-main">
+            <div id="meshViz"><svg id="meshSvg"></svg></div>
+            <div id="meshLog"></div>
+        </main>
+    </section>
+
+</div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="script.js"></script>
 </body>
-
 </html>
