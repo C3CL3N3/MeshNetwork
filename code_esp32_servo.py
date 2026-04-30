@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Student Lab - COMP 4531 - HKUST
 # SPDX-License-Identifier: MIT
 #
-# LoRa Mesh Relay Node — XIAO ESP32-S3 + SX1262
+# LoRa Mesh Relay Node with Bus Servo Control — XIAO ESP32-S3 + SX1262
 # Protocol: H/R/D three-packet distance-vector mesh with adaptive SF.
+# Servo: Seeed Bus Servo Driver Board for XIAO (TX=D7, RX=D6)
+#
 # Serial commands:
 #   <text>              → broadcast DATA (dst=0)
 #   TO:<dst>:<text>     → unicast DATA to node dst
@@ -22,6 +24,7 @@ import supervisor
 import sys
 import mesh_common as mc
 from sx1262 import SX1262
+from scservo import SCServo
 import logger
 
 # ── Identity ──────────────────────────────────────────────────────────────────
@@ -57,6 +60,8 @@ try:
 except Exception as e:
     print("LoRa FAIL: {}".format(e))
     raise
+
+servo = SCServo()
 
 # ── Node state ────────────────────────────────────────────────────────────────
 my_msg_id      = 0
@@ -99,12 +104,27 @@ def _lora_tx_lbt(pkt_bytes):
     print("  LBT: relay dropped")
 
 def _relay_prob(rssi):
-    """RSSI-weighted relay probability — strong signal → many neighbours
-    already relayed → lower chance needed."""
     if rssi > -60:  return 0.40
     if rssi > -75:  return 0.65
     if rssi > -90:  return 0.85
     return 0.97
+
+# ── Servo command parser ──────────────────────────────────────────────────────
+def _servo_cmd(payload):
+    """Parse SERVO:<angle> | SERVO:<id>:<angle> | SERVO:<id>:<angle>:<ms>"""
+    parts = payload[6:].split(":")
+    try:
+        if len(parts) == 1:
+            servo.write_angle(1, float(parts[0]))
+            print("  servo id=1 angle={}".format(parts[0]))
+        elif len(parts) == 2:
+            servo.write_angle(int(parts[0]), float(parts[1]))
+            print("  servo id={} angle={}".format(parts[0], parts[1]))
+        elif len(parts) >= 3:
+            servo.write_angle(int(parts[0]), float(parts[1]), move_time=int(parts[2]))
+            print("  servo id={} angle={} ms={}".format(parts[0], parts[1], parts[2]))
+    except Exception as e:
+        print("  servo err: {}".format(e))
 
 # ── Transmit functions ────────────────────────────────────────────────────────
 def send_hello():
@@ -114,12 +134,10 @@ def send_hello():
 def send_route_ad_self():
     global my_route_mid
     my_route_mid = (my_route_mid + 1) % 256
-    # Originating node: fwd=self, hops=0, cost=0
     _lora_tx(mc.encode_route_ad(NODE_ID, NODE_ID, my_route_mid, 0, 0))
     print("TX R self mid={}".format(my_route_mid))
 
 def send_data(dst, payload):
-    """Originate a DATA packet. dst=0 for broadcast. Returns True on success."""
     global my_msg_id
     my_msg_id = (my_msg_id + 1) % 256
     mc.data_mark(NODE_ID, my_msg_id)
@@ -150,12 +168,10 @@ def _handle_route_ad(pkt, rssi, snr):
     if mc.route_seen(orig, mid):
         return
     mc.route_mark(orig, mid)
-    # fwd is the immediate transmitter — update its link metrics
     mc.neighbor_update(fwd, snr, rssi)
     improved = mc.route_update(orig, fwd, hops, cost)
     print("R  orig={} fwd={} hops={} cost={}{}".format(
         orig, fwd, hops, cost, " *" if improved else ""))
-    # Relay within TTL: forward with NODE_ID as new fwd, incremented hops+cost
     if hops + 1 < mc.ROUTE_TTL:
         nb = mc.neighbor.get(fwd)
         link = mc.SF_AIRTIME[nb['sf']] if nb else mc.SF_AIRTIME[mc.network_sf]
@@ -171,12 +187,10 @@ def _handle_data(pkt, rssi, snr):
     mc.data_mark(src, mid)
     print("D  src={} dst={} nh={} ttl={} rssi={} '{}'".format(
         src, dst, next_hop, ttl, rssi, payload))
-    # Deliver locally if broadcast or addressed to this node
     if dst == 0 or dst == NODE_ID:
         _deliver(src, dst, payload)
     if dst == NODE_ID or ttl <= 1:
         return
-    # Broadcast: probabilistic relay weighted by RSSI
     if next_hop == 0:
         if random.random() > _relay_prob(rssi):
             print("  -> flood relay skipped (prob)")
@@ -185,7 +199,6 @@ def _handle_data(pkt, rssi, snr):
         _lora_tx_lbt(mc.encode_data(src, dst, 0, mid, ttl - 1, payload))
         print("  -> flood relay")
         return
-    # Unicast: only the designated next_hop relays
     if next_hop != NODE_ID:
         return
     new_nh = mc.route_next_hop(dst)
@@ -199,13 +212,14 @@ def _handle_data(pkt, rssi, snr):
 def _deliver(src, dst, payload):
     print("  v DELIVER from N{}: '{}'".format(src, payload))
     logger.log("RX src={} dst={} '{}'".format(src, dst, payload))
-    if payload.startswith("PARROT:"):
+    if payload.startswith("SERVO:"):
+        _servo_cmd(payload)
+    elif payload.startswith("PARROT:"):
         time.sleep(0.15)
         send_data(src, "PONG:{}:{}".format(NODE_ID, payload[7:]))
 
 # ── RX cycle ──────────────────────────────────────────────────────────────────
 def rx_cycle():
-    """Non-blocking receive + dispatch + SF adaptation check."""
     global _sf_good_since
     try:
         result = lora.recv(timeout_en=True, timeout_ms=300)
@@ -230,7 +244,6 @@ def rx_cycle():
             pkt = mc.decode_data(data)
             if pkt:
                 _handle_data(pkt, rssi, snr)
-        # SF adaptation — checked after every received packet (fresh SNR data)
         if mc.network_sf_check_up():
             _radio_set_sf(mc.network_sf)
             _sf_good_since = None
@@ -245,7 +258,6 @@ def rx_cycle():
 
 # ── Periodic maintenance ──────────────────────────────────────────────────────
 def _periodic(now):
-    """Fire timed tasks. Call from main loop with time.monotonic()."""
     global last_hello, last_route_ad, last_expire
     if now - last_hello >= mc.HELLO_INTERVAL:
         last_hello = now
@@ -263,7 +275,7 @@ def _periodic(now):
             print("Expired routes: {}".format(dead_rt))
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-print("Mesh relay running — Node {}".format(NODE_ID))
+print("Mesh servo node running — Node {}".format(NODE_ID))
 last_hello    = -random.uniform(0, mc.HELLO_INTERVAL * 0.9)
 last_route_ad = -random.uniform(0, mc.ROUTE_AD_INTERVAL * 0.9)
 last_expire   = 0.0
@@ -272,7 +284,6 @@ while True:
     now = time.monotonic()
     _periodic(now)
 
-    # Serial input: broadcast or unicast
     try:
         if supervisor.runtime.serial_bytes_available:
             chunk = sys.stdin.read(supervisor.runtime.serial_bytes_available)

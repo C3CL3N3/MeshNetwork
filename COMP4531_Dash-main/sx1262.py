@@ -88,17 +88,36 @@ class SX1262:
 
     def __init__(self, spi, sck, mosi, miso, nss, dio1, rst, busy, rf_sw=None):
         import digitalio
-        self._spi   = spi
-        self._nss   = nss
-        self._dio1  = dio1
-        self._rst   = rst
-        self._busy  = busy
-        self._rf_sw = rf_sw
 
-        nss.direction  = digitalio.Direction.OUTPUT; nss.value  = True
-        rst.direction  = digitalio.Direction.OUTPUT; rst.value  = True
-        dio1.direction = digitalio.Direction.INPUT
-        busy.direction = digitalio.Direction.INPUT
+        # Accept raw microcontroller pins OR already-wrapped DigitalInOut objects.
+        def _out(pin):
+            if isinstance(pin, digitalio.DigitalInOut):
+                pin.direction = digitalio.Direction.OUTPUT
+                return pin
+            p = digitalio.DigitalInOut(pin)
+            p.direction = digitalio.Direction.OUTPUT
+            return p
+
+        def _in(pin):
+            if isinstance(pin, digitalio.DigitalInOut):
+                pin.direction = digitalio.Direction.INPUT
+                return pin
+            p = digitalio.DigitalInOut(pin)
+            p.direction = digitalio.Direction.INPUT
+            return p
+
+        self._spi  = spi
+        self._nss  = _out(nss);  self._nss.value = True
+        self._rst  = _out(rst);  self._rst.value = True
+        self._dio1 = _in(dio1)
+        self._busy = _in(busy)
+
+        if rf_sw is None:
+            self._rf_sw = None
+        elif isinstance(rf_sw, digitalio.DigitalInOut):
+            self._rf_sw = rf_sw
+        else:
+            self._rf_sw = _out(rf_sw)
 
         self._sf        = 7
         self._bw        = 125.0

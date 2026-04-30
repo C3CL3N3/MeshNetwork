@@ -24,15 +24,6 @@ import mesh_common as mc
 from sx1262 import SX1262
 import logger
 
-# ── Optional servo (Bus Servo Driver Board: TX=D7, RX=D6) ────────────────────
-_servo = None
-try:
-    from scservo import SCServo
-    _servo = SCServo()
-    print("Servo bus OK")
-except Exception as _e:
-    print("Servo bus not found: {}".format(_e))
-
 # ── Identity ──────────────────────────────────────────────────────────────────
 NODE_ID = 2  # unique per physical board (1–255); 1 is reserved for nRF gateway
 
@@ -53,13 +44,12 @@ rf_sw_pin = microcontroller.pin.GPIO38
 
 # ── Hardware init ─────────────────────────────────────────────────────────────
 try:
-    spi   = busio.SPI(sck_pin, mosi_pin, miso_pin)
-    nss   = digitalio.DigitalInOut(nss_pin)
-    dio1  = digitalio.DigitalInOut(dio1_pin)
-    rst   = digitalio.DigitalInOut(rst_pin)
-    busy  = digitalio.DigitalInOut(busy_pin)
     rf_sw = digitalio.DigitalInOut(rf_sw_pin)
-    lora  = SX1262(spi, sck_pin, mosi_pin, miso_pin, nss, dio1, rst, busy, rf_sw=rf_sw)
+    rf_sw.direction = digitalio.Direction.OUTPUT
+    rf_sw.value = False
+    spi  = busio.SPI(sck_pin, mosi_pin, miso_pin)
+    lora = SX1262(spi, sck_pin, mosi_pin, miso_pin,
+                  nss_pin, dio1_pin, rst_pin, busy_pin)
     lora.begin(freq=MESH_FREQ, bw=BW, sf=mc.network_sf, cr=CR,
                useRegulatorLDO=True, tcxoVoltage=1.8, power=22)
     print("Node {}  {} MHz  SF{}  TTL={}".format(NODE_ID, MESH_FREQ, mc.network_sf, mc.TTL_DEFAULT))
@@ -80,17 +70,33 @@ def _radio_set_sf(sf):
     global _active_sf
     if sf == _active_sf:
         return
-    lora.set_sf(sf)
+    lora.begin(freq=MESH_FREQ, bw=BW, sf=sf, cr=CR,
+               useRegulatorLDO=True, tcxoVoltage=1.8, power=22)
     _active_sf = sf
     print("RADIO SF->{}".format(sf))
 
+_last_tx = 0.0
+
 def _lora_tx(pkt_bytes):
+    global _last_tx
+    rf_sw.value = True
     lora.send(pkt_bytes)
+    rf_sw.value = False
+    _last_tx = time.monotonic()
     logger.log("TX {}".format(pkt_bytes.decode('utf-8', 'ignore').strip()))
 
 def _lora_tx_lbt(pkt_bytes):
-    if not lora.send_lbt(pkt_bytes):
-        print("  LBT: relay dropped")
+    global _last_tx
+    for attempt in range(5):
+        result = lora.recv(timeout_en=True, timeout_ms=25)
+        if not (result and isinstance(result, tuple) and result[0]):
+            rf_sw.value = True
+            lora.send(pkt_bytes)
+            rf_sw.value = False
+            _last_tx = time.monotonic()
+            return
+        time.sleep(0.06 * (2 ** attempt) + random.uniform(0, 0.04))
+    print("  LBT: relay dropped")
 
 def _relay_prob(rssi):
     """RSSI-weighted relay probability — strong signal → many neighbours
@@ -190,31 +196,9 @@ def _handle_data(pkt, rssi, snr):
     _lora_tx_lbt(mc.encode_data(src, dst, new_nh, mid, ttl - 1, payload))
     print("  -> relay to N{}".format(new_nh))
 
-def _servo_cmd(args):
-    """Parse SERVO:<angle> or SERVO:<id>:<angle> or SERVO:<id>:<angle>:<ms>"""
-    if _servo is None:
-        print("  servo not connected")
-        return
-    try:
-        parts = args.split(":")
-        if len(parts) == 1:
-            sid, angle, ms = 1, float(parts[0]), 0
-        elif len(parts) == 2:
-            sid, angle, ms = int(parts[0]), float(parts[1]), 0
-        else:
-            sid, angle, ms = int(parts[0]), float(parts[1]), int(parts[2])
-        _servo.write_angle(sid, angle, move_time=ms)
-        print("  SERVO id={} angle={} ms={}".format(sid, angle, ms))
-        logger.log("SERVO id={} angle={} ms={}".format(sid, angle, ms))
-    except Exception as e:
-        print("  servo_cmd err: {}".format(e))
-
 def _deliver(src, dst, payload):
     print("  v DELIVER from N{}: '{}'".format(src, payload))
     logger.log("RX src={} dst={} '{}'".format(src, dst, payload))
-    if payload.startswith("SERVO:"):
-        _servo_cmd(payload[6:])
-        return
     if payload.startswith("PARROT:"):
         time.sleep(0.15)
         send_data(src, "PONG:{}:{}".format(NODE_ID, payload[7:]))

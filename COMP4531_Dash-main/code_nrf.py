@@ -67,12 +67,11 @@ led.value = True  # OFF (active-low on XIAO)
 lora_ok = False
 try:
     spi   = busio.SPI(lora_sck, lora_mosi, lora_miso)
-    _nss  = digitalio.DigitalInOut(lora_nss)
-    _dio1 = digitalio.DigitalInOut(lora_dio1)
-    _rst  = digitalio.DigitalInOut(lora_rst)
-    _busy = digitalio.DigitalInOut(lora_busy)
     rf_sw = digitalio.DigitalInOut(rf_sw_pin)
-    lora  = SX1262(spi, lora_sck, lora_mosi, lora_miso, _nss, _dio1, _rst, _busy, rf_sw=rf_sw)
+    rf_sw.direction = digitalio.Direction.OUTPUT
+    rf_sw.value = False
+    lora  = SX1262(spi, lora_sck, lora_mosi, lora_miso,
+                   lora_nss, lora_dio1, lora_rst, lora_busy)
     lora.begin(freq=MESH_FREQ, bw=BW, sf=mc.network_sf, cr=CR,
                useRegulatorLDO=True, tcxoVoltage=1.6)
     lora_ok = True
@@ -127,23 +126,33 @@ def _radio_set_sf(sf):
     global _active_sf
     if sf == _active_sf:
         return
-    lora.set_sf(sf)
+    lora.begin(freq=MESH_FREQ, bw=BW, sf=sf, cr=CR,
+               useRegulatorLDO=True, tcxoVoltage=1.6)
     _active_sf = sf
     print("RADIO SF->{}".format(sf))
 
+_last_tx = 0.0
+
 def _lora_tx(pkt_bytes):
-    try:
-        lora.send(pkt_bytes)
-        logger.log("TX {}".format(pkt_bytes.decode('utf-8', 'ignore').strip()))
-    except Exception as e:
-        print("TX err: {}".format(e))
+    global _last_tx
+    rf_sw.value = True
+    lora.send(pkt_bytes)
+    rf_sw.value = False
+    _last_tx = time.monotonic()
+    logger.log("TX {}".format(pkt_bytes.decode('utf-8', 'ignore').strip()))
 
 def _lora_tx_lbt(pkt_bytes):
-    try:
-        if not lora.send_lbt(pkt_bytes):
-            print("  LBT: relay dropped")
-    except Exception as e:
-        print("TX err: {}".format(e))
+    global _last_tx
+    for attempt in range(5):
+        result = lora.recv(timeout_en=True, timeout_ms=25)
+        if not (result and isinstance(result, tuple) and result[0]):
+            rf_sw.value = True
+            lora.send(pkt_bytes)
+            rf_sw.value = False
+            _last_tx = time.monotonic()
+            return
+        time.sleep(0.06 * (2 ** attempt) + random.uniform(0, 0.04))
+    print("  LBT: relay dropped")
 
 def _relay_prob(rssi):
     if rssi > -60:  return 0.40

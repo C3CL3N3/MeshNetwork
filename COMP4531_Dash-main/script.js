@@ -1048,9 +1048,9 @@ function setEsp32Variant(v, btn) {
     btn.closest('.variant-ctrl').querySelectorAll('.var-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     const hint = document.getElementById('esp32FwHint');
-    if (hint) hint.textContent = v === 'echo'
-        ? '// echo node — auto-replies ECHO:<msg> to sender for loopback testing'
-        : '// relay node — participates in mesh routing';
+    if (hint) hint.textContent = v === 'echo'  ? '// echo node — auto-replies ECHO:<msg> to sender for loopback testing'
+                              : v === 'servo' ? '// servo node — relay + Bus Servo Driver (D7/D6) SERVO:<id>:<angle>'
+                              :                 '// relay node — participates in mesh routing';
 }
 
 // ── Main flash function ───────────────────────────────────────────────────────
@@ -1063,16 +1063,18 @@ async function flashDevice(board) {
     const nodeId   = parseInt(document.getElementById('flashNodeId').value) || 1;
     const label    = board === 'nrf' ? 'nRF52840' : 'ESP32-S3';
     const useEcho  = board === 'esp32' && _esp32Variant === 'echo';
-    const codeFile = board === 'nrf' ? 'code_nrf.py'
+    const useServo = board === 'esp32' && _esp32Variant === 'servo';
+    const codeFile = board === 'nrf'  ? 'code_nrf.py'
                    : useEcho          ? 'code_esp32_echo.py'
+                   : useServo         ? 'code_esp32_servo.py'
                    :                    'code_esp32.py';
     const btns    = document.querySelectorAll('.btn-flash');
     btns.forEach(b => b.classList.add('flashing'));
 
     try {
         // ── Fetch firmware files ───────────────────────────────────────────────
-        const varLabel = useEcho ? 'echo_node' : 'standard';
-        log(`[Flash ${label}] Fetching firmware (Node ID = ${nodeId}${useEcho ? ', ' + varLabel : ''})…`);
+        const varLabel = useEcho ? 'echo_node' : useServo ? 'servo_node' : 'standard';
+        log(`[Flash ${label}] Fetching firmware (Node ID = ${nodeId}, ${varLabel})…`);
         const [codeResp, commonResp, sx1262Resp, bootResp, loggerResp, scservoResp] = await Promise.all([
             fetch(codeFile),
             fetch('mesh_common.py'),
