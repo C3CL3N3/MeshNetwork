@@ -38,7 +38,6 @@ from adafruit_ble.uuid import VendorUUID
 from adafruit_ble.characteristics import Characteristic
 import mesh_common as mc
 from sx1262 import SX1262
-import logger
 
 # ── Identity ──────────────────────────────────────────────────────────────────
 GROUP_ID = 13  # sets BLE UUID and device name
@@ -76,7 +75,6 @@ try:
                useRegulatorLDO=True, tcxoVoltage=1.6)
     lora_ok = True
     print("LoRa OK  {} MHz  SF{}".format(MESH_FREQ, mc.network_sf))
-    logger.init()
 except Exception as e:
     print("LoRa FAIL: {}".format(e))
 
@@ -139,7 +137,6 @@ def _lora_tx(pkt_bytes):
     lora.send(pkt_bytes)
     rf_sw.value = False
     _last_tx = time.monotonic()
-    logger.log("TX {}".format(pkt_bytes.decode('utf-8', 'ignore').strip()))
 
 def _lora_tx_lbt(pkt_bytes):
     global _last_tx
@@ -257,7 +254,6 @@ def _handle_data(pkt, rssi, snr):
 
 def _deliver(src, dst, payload):
     print("  v DELIVER from N{}: '{}'".format(src, payload))
-    logger.log("RX src={} dst={} '{}'".format(src, dst, payload))
     if payload.startswith("PARROT:"):
         time.sleep(0.15)
         send_data(src, "PONG:{}:{}".format(NODE_ID, payload[7:]))

@@ -25,7 +25,6 @@ import sys
 import mesh_common as mc
 from sx1262 import SX1262
 from scservo import SCServo
-import logger
 
 # ── Identity ──────────────────────────────────────────────────────────────────
 NODE_ID = 2  # unique per physical board (1–255); 1 is reserved for nRF gateway
@@ -56,7 +55,6 @@ try:
     lora.begin(freq=MESH_FREQ, bw=BW, sf=mc.network_sf, cr=CR,
                useRegulatorLDO=True, tcxoVoltage=1.8, power=22)
     print("Node {}  {} MHz  SF{}  TTL={}".format(NODE_ID, MESH_FREQ, mc.network_sf, mc.TTL_DEFAULT))
-    logger.init()
 except Exception as e:
     print("LoRa FAIL: {}".format(e))
     raise
@@ -88,7 +86,6 @@ def _lora_tx(pkt_bytes):
     lora.send(pkt_bytes)
     rf_sw.value = False
     _last_tx = time.monotonic()
-    logger.log("TX {}".format(pkt_bytes.decode('utf-8', 'ignore').strip()))
 
 def _lora_tx_lbt(pkt_bytes):
     global _last_tx
@@ -209,7 +206,6 @@ def _handle_data(pkt, rssi, snr):
 
 def _deliver(src, dst, payload):
     print("  v DELIVER from N{}: '{}'".format(src, payload))
-    logger.log("RX src={} dst={} '{}'".format(src, dst, payload))
     if payload.startswith("SERVO:"):
         _servo_cmd(payload)
     elif payload.startswith("PARROT:"):
