@@ -1075,26 +1075,20 @@ async function flashDevice(board) {
         // ── Fetch firmware files ───────────────────────────────────────────────
         const varLabel = useEcho ? 'echo_node' : useServo ? 'servo_node' : 'standard';
         log(`[Flash ${label}] Fetching firmware (Node ID = ${nodeId}, ${varLabel})…`);
-        const [codeResp, commonResp, sx1262Resp, bootResp, loggerResp, scservoResp] = await Promise.all([
+        const [codeResp, commonResp, sx1262Resp, scservoResp] = await Promise.all([
             fetch(codeFile),
             fetch('mesh_common.py'),
             fetch('sx1262.py'),
-            fetch('boot.py'),
-            fetch('logger.py'),
             fetch('scservo.py'),
         ]);
         if (!codeResp.ok)    throw new Error(`Cannot fetch ${codeFile} (${codeResp.status})`);
         if (!commonResp.ok)  throw new Error(`Cannot fetch mesh_common.py (${commonResp.status})`);
         if (!sx1262Resp.ok)  throw new Error(`Cannot fetch sx1262.py (${sx1262Resp.status})`);
-        if (!bootResp.ok)    throw new Error(`Cannot fetch boot.py (${bootResp.status})`);
-        if (!loggerResp.ok)  throw new Error(`Cannot fetch logger.py (${loggerResp.status})`);
         if (!scservoResp.ok) throw new Error(`Cannot fetch scservo.py (${scservoResp.status})`);
 
         let codeContent      = await codeResp.text();
         const commonContent  = await commonResp.text();
         const sx1262Content  = await sx1262Resp.text();
-        const bootContent    = await bootResp.text();
-        const loggerContent  = await loggerResp.text();
         const scservoContent = await scservoResp.text();
 
         // Inject chosen NODE_ID
@@ -1123,15 +1117,13 @@ async function flashDevice(board) {
             await wr.close();
         }
 
-        await writeFile(destDir, 'boot.py', bootContent);
-        await writeFile(destDir, 'logger.py', loggerContent);
         await writeFile(destDir, 'sx1262.py', sx1262Content);
         await writeFile(destDir, 'scservo.py', scservoContent);
         await writeFile(destDir, 'mesh_common.py', commonContent);
         await writeFile(destDir, 'code.py', codeContent);
 
-        const varSuffix = useEcho ? '  [echo_node]' : '';
-        log(`✓ ${label} Node ${nodeId} → ${destDir.name}/  [boot+logger+sx1262+mesh_common+code]${varSuffix}  (board restarts)`);
+        const varSuffix = useEcho ? '  [echo_node]' : useServo ? '  [servo_node]' : '';
+        log(`✓ ${label} Node ${nodeId} → ${destDir.name}/  [sx1262+mesh_common+code]${varSuffix}  (board restarts)`);
     } catch (e) {
         if (e.name !== 'AbortError') log(`Flash error: ${e.message}`);
     } finally {

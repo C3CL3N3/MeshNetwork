@@ -130,9 +130,9 @@ class SX1262:
     # == Low-level SPI =========================================================
 
     def _wait_busy(self, ms=100):
-        end = time.monotonic_ns() + ms * 1_000_000
+        end = time.monotonic() + ms / 1000.0
         while self._busy.value:
-            if time.monotonic_ns() > end:
+            if time.monotonic() > end:
                 raise RuntimeError("SX1262 busy timeout")
 
     def _xfer(self, out_buf):
@@ -189,12 +189,12 @@ class SX1262:
 
     def _poll_irq(self, mask, timeout_ms):
         """Spin-wait for any bit in mask. Returns irq word or 0 on timeout."""
-        end = time.monotonic_ns() + timeout_ms * 1_000_000
+        end = time.monotonic() + timeout_ms / 1000.0
         while True:
             irq = self._get_irq()
             if irq & mask:
                 return irq
-            if time.monotonic_ns() > end:
+            if time.monotonic() > end:
                 return 0
 
     # == Packet status =========================================================
