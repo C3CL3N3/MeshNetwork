@@ -129,13 +129,11 @@ def _servo_cmd(payload):
 # ── Transmit functions ────────────────────────────────────────────────────────
 def send_hello():
     _lora_tx(mc.encode_hello(NODE_ID, mc.network_sf))
-    print("TX H sf={}".format(mc.network_sf))
 
 def send_route_ad_self():
     global my_route_mid
     my_route_mid = (my_route_mid + 1) % 256
     _lora_tx(mc.encode_route_ad(NODE_ID, NODE_ID, my_route_mid, 0, 0))
-    print("TX R self mid={}".format(my_route_mid))
 
 def send_data(dst, payload):
     global my_msg_id

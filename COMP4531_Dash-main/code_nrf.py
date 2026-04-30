@@ -172,7 +172,6 @@ def send_route_ad_self():
         return
     my_route_mid = (my_route_mid + 1) % 256
     _lora_tx(mc.encode_route_ad(NODE_ID, NODE_ID, my_route_mid, 0, 0))
-    print("TX R self mid={}".format(my_route_mid))
 
 def send_data(dst, payload):
     global my_msg_id

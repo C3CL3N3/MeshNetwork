@@ -109,14 +109,11 @@ def _relay_prob(rssi):
 # ── Transmit functions ────────────────────────────────────────────────────────
 def send_hello():
     _lora_tx(mc.encode_hello(NODE_ID, mc.network_sf))
-    print("TX H sf={}".format(mc.network_sf))
 
 def send_route_ad_self():
     global my_route_mid
     my_route_mid = (my_route_mid + 1) % 256
-    # Originating node: fwd=self, hops=0, cost=0
     _lora_tx(mc.encode_route_ad(NODE_ID, NODE_ID, my_route_mid, 0, 0))
-    print("TX R self mid={}".format(my_route_mid))
 
 def send_data(dst, payload):
     """Originate a DATA packet. dst=0 for broadcast. Returns True on success."""
