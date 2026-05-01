@@ -2,26 +2,22 @@
 # SPDX-License-Identifier: MIT
 #
 # LoRa Mesh BLE Gateway — XIAO nRF52840 Sense + SX1262
-# Protocol: H/R/D three-packet distance-vector mesh with adaptive SF.
-# BLE exposes two characteristics (same UUIDs as before):
-#   cmd_rx  (…41…): central writes commands → node
-#   data_tx (…42…): node pushes events     → central
+# Protocol: H/R/D distance-vector mesh, fixed SF7.
 #
 # BLE commands (central → node):
-#   SEND_MESH:<text>          broadcast DATA
-#   SEND_NODE:<dst>:<text>    unicast DATA to node dst
-#   PARROT:<text>             BLE loopback test (no LoRa)
-#   ROUTES                    dump routing table via notifications
-#   NEIGHBORS                 dump neighbor table via notifications
+#   SEND_MESH:<text>       broadcast DATA
+#   SEND_NODE:<dst>:<text> unicast DATA to node dst
+#   PARROT:<text>          BLE loopback test
+#   ROUTES                 dump routing table
+#   NEIGHBORS              dump neighbor table
 #
 # BLE notifications (node → central):
-#   MESH_INFO:NODE_ID:<n>|SF:<sf>        sent 1.5 s after connect
-#   MESH_PING:<n>                        heartbeat every 5 s
+#   MESH_INFO:NODE_ID:<n>
+#   MESH_PING:<n>
 #   MESH_RX:<src>|<dst>|<mid>|<ttl>|<rssi>|<snr>|<payload>
 #   MESH_TX:<src>|<dst>|<nh>|<mid>|<ttl>|<payload>
-#   MESH_ROUTE:<dest>|<next_hop>|<hops>|<cost>
-#   MESH_NB:<node>|<rssi>|<snr>|<sf>[|ASF:<old>-><new>]
-#   MESH_SF:<new_sf>                     when network SF adapts
+#   MESH_ROUTE:<dest>|<next_hop>|<hops>
+#   MESH_NB:<node>|<rssi>|<snr>
 #   MESH_ERR:LORA_FAIL
 #   MESH_ERR:NO_ROUTE:<dst>
 #   MESH_PARROT:<text>
@@ -40,15 +36,15 @@ import mesh_common as mc
 from sx1262 import SX1262
 
 # ── Identity ──────────────────────────────────────────────────────────────────
-GROUP_ID = 13  # sets BLE UUID and device name
-NODE_ID  = 1   # gateway is always node 1
+GROUP_ID = 13
+NODE_ID  = 1
 
-# ── LoRa hardware parameters ──────────────────────────────────────────────────
+# ── LoRa parameters ───────────────────────────────────────────────────────────
 MESH_FREQ = 912.0
 BW        = 125.0
 CR        = 5
 
-# ── Pins (nRF52840) ───────────────────────────────────────────────────────────
+# ── Pins ──────────────────────────────────────────────────────────────────────
 lora_sck  = board.D8
 lora_miso = board.D9
 lora_mosi = board.D10
@@ -61,7 +57,7 @@ rf_sw_pin = board.D5
 # ── Hardware init ─────────────────────────────────────────────────────────────
 led = digitalio.DigitalInOut(board.LED_BLUE)
 led.direction = digitalio.Direction.OUTPUT
-led.value = True  # OFF (active-low on XIAO)
+led.value = True  # OFF (active-low)
 
 lora_ok = False
 try:
@@ -71,10 +67,10 @@ try:
     rf_sw.value = False
     lora  = SX1262(spi, lora_sck, lora_mosi, lora_miso,
                    lora_nss, lora_dio1, lora_rst, lora_busy)
-    lora.begin(freq=MESH_FREQ, bw=BW, sf=mc.network_sf, cr=CR,
+    lora.begin(freq=MESH_FREQ, bw=BW, sf=mc.SF, cr=CR,
                useRegulatorLDO=True, tcxoVoltage=1.6)
     lora_ok = True
-    print("LoRa OK  {} MHz  SF{}".format(MESH_FREQ, mc.network_sf))
+    print("LoRa OK  {} MHz  SF{}".format(MESH_FREQ, mc.SF))
 except Exception as e:
     print("LoRa FAIL: {}".format(e))
 
@@ -101,10 +97,8 @@ mesh_svc = MeshService()
 adv      = ProvideServicesAdvertisement(mesh_svc)
 
 # ── Node state ────────────────────────────────────────────────────────────────
-my_msg_id      = 0
-my_route_mid   = 0
-_active_sf     = mc.network_sf
-_sf_good_since = None
+my_msg_id    = 0
+my_route_mid = 0
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def blink(n=1):
@@ -120,36 +114,21 @@ def ble_notify(msg):
     except Exception:
         pass
 
-def _radio_set_sf(sf):
-    global _active_sf
-    if sf == _active_sf:
-        return
-    lora.begin(freq=MESH_FREQ, bw=BW, sf=sf, cr=CR,
-               useRegulatorLDO=True, tcxoVoltage=1.6)
-    _active_sf = sf
-    print("RADIO SF->{}".format(sf))
-
-_last_tx = 0.0
-
 def _lora_tx(pkt_bytes):
-    global _last_tx
     rf_sw.value = True
     lora.send(pkt_bytes)
     rf_sw.value = False
-    _last_tx = time.monotonic()
 
 def _lora_tx_lbt(pkt_bytes):
-    global _last_tx
     for attempt in range(5):
         result = lora.recv(timeout_en=True, timeout_ms=25)
         if not (result and isinstance(result, tuple) and result[0]):
             rf_sw.value = True
             lora.send(pkt_bytes)
             rf_sw.value = False
-            _last_tx = time.monotonic()
             return
         time.sleep(0.06 * (2 ** attempt) + random.uniform(0, 0.04))
-    print("  LBT: relay dropped")
+    print("  LBT: dropped")
 
 def _relay_prob(rssi):
     if rssi > -60:  return 0.40
@@ -157,18 +136,18 @@ def _relay_prob(rssi):
     if rssi > -90:  return 0.85
     return 0.97
 
-# ── Transmit functions ────────────────────────────────────────────────────────
+# ── Transmit ──────────────────────────────────────────────────────────────────
 def send_hello():
     if not lora_ok:
         return
-    _lora_tx(mc.encode_hello(NODE_ID, mc.network_sf))
+    _lora_tx(mc.encode_hello(NODE_ID))
 
 def send_route_ad_self():
     global my_route_mid
     if not lora_ok:
         return
     my_route_mid = (my_route_mid + 1) % 256
-    _lora_tx(mc.encode_route_ad(NODE_ID, NODE_ID, my_route_mid, 0, 0))
+    _lora_tx(mc.encode_route_ad(NODE_ID, NODE_ID, my_route_mid, 0))
 
 def send_data(dst, payload):
     global my_msg_id
@@ -177,90 +156,70 @@ def send_data(dst, payload):
         return False
     my_msg_id = (my_msg_id + 1) % 256
     mc.data_mark(NODE_ID, my_msg_id)
-    if dst == 0:
-        nh = 0
-    else:
-        nh = mc.route_next_hop(dst)
-        if nh is None:
-            print("No route to N{}".format(dst))
-            ble_notify("MESH_ERR:NO_ROUTE:{}".format(dst))
-            return False
+    nh = 0 if dst == 0 else mc.route_next_hop(dst)
+    if dst != 0 and nh is None:
+        ble_notify("MESH_ERR:NO_ROUTE:{}".format(dst))
+        return False
     pkt = mc.encode_data(NODE_ID, dst, nh, my_msg_id, mc.TTL_DEFAULT, payload)
     _lora_tx(pkt)
     ble_notify("MESH_TX:{}|{}|{}|{}|{}|{}".format(
         NODE_ID, dst, nh, my_msg_id, mc.TTL_DEFAULT, payload))
-    print("TX D dst={} nh={} mid={} '{}'".format(dst, nh, my_msg_id, payload))
     return True
 
 # ── Receive handlers ──────────────────────────────────────────────────────────
-def _handle_hello(pkt, rssi, snr):
-    src, src_sf = pkt
+def _handle_hello(src, rssi, snr):
     if src == NODE_ID:
         return
-    old_sf, new_sf = mc.neighbor_update(src, snr, rssi)
-    sf_tag = "|ASF:{}->{}" .format(old_sf, new_sf) if new_sf != old_sf else ""
-    ble_notify("MESH_NB:{}|{}|{:.1f}|{}{}".format(src, rssi, snr, new_sf, sf_tag))
-    print("H  N{} sf={} rssi={} snr={:.1f}{}".format(src, src_sf, rssi, snr, sf_tag))
+    mc.neighbor_update(src, snr, rssi)
+    ble_notify("MESH_NB:{}|{}|{:.1f}".format(src, rssi, snr))
+    print("H  N{} rssi={} snr={:.1f}".format(src, rssi, snr))
 
 def _handle_route_ad(pkt, rssi, snr):
-    orig, fwd, mid, hops, cost = pkt
-    if orig == NODE_ID:
-        return
-    if mc.route_seen(orig, mid):
+    orig, fwd, mid, hops = pkt
+    if orig == NODE_ID or mc.route_seen(orig, mid):
         return
     mc.route_mark(orig, mid)
     mc.neighbor_update(fwd, snr, rssi)
-    improved = mc.route_update(orig, fwd, hops, cost)
+    improved = mc.route_update(orig, fwd, hops)
     if improved:
         r = mc.route_table[orig]
-        ble_notify("MESH_ROUTE:{}|{}|{}|{}".format(
-            orig, r['next_hop'], r['hops'], r['cost']))
-        print("Route N{}: nh={} hops={} cost={}".format(
-            orig, r['next_hop'], r['hops'], r['cost']))
+        ble_notify("MESH_ROUTE:{}|{}|{}".format(orig, r['next_hop'], r['hops']))
+        print("Route N{}: nh={} hops={}".format(orig, r['next_hop'], r['hops']))
     if hops + 1 < mc.ROUTE_TTL:
-        nb  = mc.neighbor.get(fwd)
-        link = mc.SF_AIRTIME[nb['sf']] if nb else mc.SF_AIRTIME[mc.network_sf]
         time.sleep(random.uniform(0.02, 0.12))
-        _lora_tx_lbt(mc.encode_route_ad(orig, NODE_ID, mid, hops + 1, cost + link))
+        _lora_tx_lbt(mc.encode_route_ad(orig, NODE_ID, mid, hops + 1))
 
 def _handle_data(pkt, rssi, snr):
     src, dst, next_hop, mid, ttl, payload = pkt
-    if src == NODE_ID:
-        return
-    if mc.data_seen(src, mid):
+    if src == NODE_ID or mc.data_seen(src, mid):
         return
     mc.data_mark(src, mid)
     if dst == 0 or dst == NODE_ID:
         ble_notify("MESH_RX:{}|{}|{}|{}|{}|{:.1f}|{}".format(
             src, dst, mid, ttl, rssi, snr, payload))
-        _deliver(src, dst, payload)
+        _deliver(src, payload)
     if dst == NODE_ID or ttl <= 1:
         return
     if next_hop == 0:
         if random.random() > _relay_prob(rssi):
-            print("  -> flood relay skipped (prob)")
             return
         time.sleep(random.uniform(0.05, 0.20))
         _lora_tx_lbt(mc.encode_data(src, dst, 0, mid, ttl - 1, payload))
-        print("  -> flood relay")
     elif next_hop == NODE_ID:
         new_nh = mc.route_next_hop(dst)
         if new_nh is None:
-            print("  -> no route to N{}, drop".format(dst))
             return
         time.sleep(random.uniform(0.05, 0.15))
         _lora_tx_lbt(mc.encode_data(src, dst, new_nh, mid, ttl - 1, payload))
-        print("  -> relay to N{}".format(new_nh))
 
-def _deliver(src, dst, payload):
-    print("  v DELIVER from N{}: '{}'".format(src, payload))
+def _deliver(src, payload):
+    print("  DELIVER N{}: '{}'".format(src, payload))
     if payload.startswith("PARROT:"):
         time.sleep(0.15)
         send_data(src, "PONG:{}:{}".format(NODE_ID, payload[7:]))
 
 # ── RX cycle ──────────────────────────────────────────────────────────────────
 def rx_cycle():
-    global _sf_good_since
     if not lora_ok:
         return
     try:
@@ -270,14 +229,11 @@ def rx_cycle():
         data, _ = result
         rssi = lora.getRSSI()
         snr  = lora.getSNR()
-        try:
-            s = data.decode('utf-8', 'ignore').strip()
-        except Exception:
-            return
+        s = data.decode('utf-8', 'ignore').strip()
         if s.startswith("H:"):
-            pkt = mc.decode_hello(data)
-            if pkt:
-                _handle_hello(pkt, rssi, snr)
+            src = mc.decode_hello(data)
+            if src is not None:
+                _handle_hello(src, rssi, snr)
         elif s.startswith("R:"):
             pkt = mc.decode_route_ad(data)
             if pkt:
@@ -286,18 +242,6 @@ def rx_cycle():
             pkt = mc.decode_data(data)
             if pkt:
                 _handle_data(pkt, rssi, snr)
-        # SF adaptation after fresh SNR data
-        if mc.network_sf_check_up():
-            _radio_set_sf(mc.network_sf)
-            _sf_good_since = None
-            ble_notify("MESH_SF:{}".format(mc.network_sf))
-            print("SF^ {}".format(mc.network_sf))
-        else:
-            changed, _sf_good_since = mc.network_sf_check_down(_sf_good_since)
-            if changed:
-                _radio_set_sf(mc.network_sf)
-                ble_notify("MESH_SF:{}".format(mc.network_sf))
-                print("SF_ {}".format(mc.network_sf))
     except Exception as e:
         print("RX err: {}".format(e))
 
@@ -308,20 +252,17 @@ def _handle_ble_cmd(cmd):
     elif cmd.startswith("SEND_MESH:"):
         send_data(0, cmd[10:])
     elif cmd.startswith("SEND_NODE:"):
-        rest  = cmd[10:]
-        colon = rest.find(":")
+        rest = cmd[10:]; colon = rest.find(":")
         if colon > 0:
             send_data(int(rest[:colon]), rest[colon + 1:])
     elif cmd == "ROUTES":
         for dest, r in mc.route_table.items():
-            ble_notify("MESH_ROUTE:{}|{}|{}|{}".format(
-                dest, r['next_hop'], r['hops'], r['cost']))
+            ble_notify("MESH_ROUTE:{}|{}|{}".format(dest, r['next_hop'], r['hops']))
     elif cmd == "NEIGHBORS":
         for nid, nb in mc.neighbor.items():
-            ble_notify("MESH_NB:{}|{}|{:.1f}|{}".format(
-                nid, nb['rssi'], nb['snr'], nb['sf']))
+            ble_notify("MESH_NB:{}|{}|{:.1f}".format(nid, nb['rssi'], nb['snr']))
 
-# ── Periodic maintenance ──────────────────────────────────────────────────────
+# ── Periodic ──────────────────────────────────────────────────────────────────
 def _periodic(now):
     global last_hello, last_route_ad, last_expire
     if now - last_hello >= mc.HELLO_INTERVAL:
@@ -336,7 +277,7 @@ def _periodic(now):
         mc.route_expire()
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-print("Node {}  {} MHz  SF{}".format(NODE_ID, MESH_FREQ, mc.network_sf))
+print("Node {}  {} MHz  SF{}".format(NODE_ID, MESH_FREQ, mc.SF))
 blink(3)
 
 last_hello    = -random.uniform(0, mc.HELLO_INTERVAL * 0.9)
@@ -344,7 +285,6 @@ last_route_ad = -random.uniform(0, mc.ROUTE_AD_INTERVAL * 0.9)
 last_expire   = 0.0
 
 while True:
-    # ── Not connected: advertise, keep mesh running ────────────────────────────
     ble.start_advertising(adv)
     while not ble.connected:
         led.value = not led.value
@@ -358,17 +298,15 @@ while True:
     print("BLE connected")
     blink(5)
 
-    # Send discovery broadcast so all mesh nodes announce themselves
     if lora_ok:
         send_data(0, "DISC:{}".format(NODE_ID))
 
     time.sleep(1.5)
-    ble_notify("MESH_INFO:NODE_ID:{}|SF:{}".format(NODE_ID, mc.network_sf))
+    ble_notify("MESH_INFO:NODE_ID:{}".format(NODE_ID))
 
     last_ping = time.monotonic()
     ping_n    = 0
 
-    # ── Connected: mesh + BLE ──────────────────────────────────────────────────
     while ble.connected:
         now = time.monotonic()
         _periodic(now)

@@ -263,27 +263,19 @@ function handleControlData(e) {
     if (msg.startsWith("MESH_INFO:"))   { handleMeshInfo(msg.substring(10)); return; }
     if (msg.startsWith("MESH_ROUTE:"))  { handleMeshRoute(msg.substring(11)); return; }
     if (msg.startsWith("MESH_NB:"))     { handleMeshNeighbor(msg.substring(8)); return; }
-    if (msg.startsWith("MESH_SF:"))     { handleMeshSf(msg.substring(8)); return; }
     if (msg.startsWith("MESH_PING:"))   { /* heartbeat — silent */ return; }
     if (msg.startsWith("MESH_ERR:"))    { log("node_error: " + msg.substring(9)); return; }
 
     log("rx: " + msg);
 }
 
-function handleMeshSf(data) {
-    const sf = data.trim();
-    const el = document.getElementById('meshNetSf');
-    if (el) el.innerText = `SF${sf}`;
-    addMeshLog(`network_sf → SF${sf}`, 'rt');
-}
-
 function handleMeshRoute(data) {
-    // dest|next_hop|hops|cost
-    const [dest, nh, hops, cost] = data.split('|');
+    // dest|next_hop|hops
+    const [dest, nh, hops] = data.split('|');
     const destId  = parseInt(dest);
     const nhId    = parseInt(nh);
     const hopsNum = parseInt(hops);
-    addMeshLog(`route N${dest}: next=N${nh} hops=${hops} cost=${cost}ms`, 'rt');
+    addMeshLog(`route N${dest}: next=N${nh} hops=${hops}`, 'rt');
 
     const svgEl = document.getElementById('meshSvg');
     const cx = svgEl ? (svgEl.clientWidth  || 600) / 2 : 300;
@@ -335,16 +327,13 @@ function handleMeshRoute(data) {
 }
 
 function handleMeshNeighbor(data) {
-    // node|rssi|snr|sf[|ASF:old->new]
-    const parts = data.split('|');
-    const [nid, rssi, snr, sf] = parts;
-    const sfTag = parts[4] ? ` (${parts[4]})` : '';
-    // Store sf in link so D3 can color it
+    // node|rssi|snr
+    const [nid, rssi, snr] = data.split('|');
     const nodeId = parseInt(nid);
     const lkA = Math.min(nodeId, meshMyId), lkB = Math.max(nodeId, meshMyId);
     const existing = meshLinks.get(`${lkA}-${lkB}`);
-    if (existing) { existing.sf = parseInt(sf); meshD3Update(); }
-    addMeshLog(`neighbor N${nid}: rssi=${rssi} snr=${snr} sf=SF${sf}${sfTag}`, 'rt');
+    if (existing) { existing.rssi = parseFloat(rssi); existing.snr = parseFloat(snr); meshD3Update(); }
+    addMeshLog(`neighbor N${nid}: rssi=${rssi} snr=${snr}`, 'rt');
 }
 
 async function sendLoRa() {
@@ -1048,8 +1037,7 @@ function setEsp32Variant(v, btn) {
     btn.closest('.variant-ctrl').querySelectorAll('.var-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     const hint = document.getElementById('esp32FwHint');
-    if (hint) hint.textContent = v === 'echo'  ? '// echo node — auto-replies ECHO:<msg> to sender for loopback testing'
-                              : v === 'servo' ? '// servo node — relay + Bus Servo Driver (D7/D6) SERVO:<id>:<angle>'
+    if (hint) hint.textContent = v === 'servo' ? '// servo node — relay + MG90S PWM servo on D7  SERVO:<angle>'
                               :                 '// relay node — participates in mesh routing';
 }
 
@@ -1062,18 +1050,16 @@ async function flashDevice(board) {
 
     const nodeId   = parseInt(document.getElementById('flashNodeId').value) || 1;
     const label    = board === 'nrf' ? 'nRF52840' : 'ESP32-S3';
-    const useEcho  = board === 'esp32' && _esp32Variant === 'echo';
     const useServo = board === 'esp32' && _esp32Variant === 'servo';
-    const codeFile = board === 'nrf'  ? 'code_nrf.py'
-                   : useEcho          ? 'code_esp32_echo.py'
-                   : useServo         ? 'code_esp32_servo.py'
-                   :                    'code_esp32.py';
+    const codeFile = board === 'nrf' ? 'code_nrf.py'
+                   : useServo        ? 'code_esp32_servo.py'
+                   :                   'code_esp32.py';
     const btns    = document.querySelectorAll('.btn-flash');
     btns.forEach(b => b.classList.add('flashing'));
 
     try {
         // ── Fetch firmware files ───────────────────────────────────────────────
-        const varLabel = useEcho ? 'echo_node' : useServo ? 'servo_node' : 'standard';
+        const varLabel = useServo ? 'servo_node' : 'standard';
         log(`[Flash ${label}] Fetching firmware (Node ID = ${nodeId}, ${varLabel})…`);
         const [codeResp, commonResp, sx1262Resp, scservoResp] = await Promise.all([
             fetch(codeFile),

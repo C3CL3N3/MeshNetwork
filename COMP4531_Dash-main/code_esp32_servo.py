@@ -1,35 +1,30 @@
 # SPDX-FileCopyrightText: 2026 Student Lab - COMP 4531 - HKUST
 # SPDX-License-Identifier: MIT
 #
-# LoRa Mesh Relay Node with Bus Servo Control — XIAO ESP32-S3 + SX1262
-# Protocol: H/R/D three-packet distance-vector mesh with adaptive SF.
-# Servo: Seeed Bus Servo Driver Board for XIAO (TX=D7, RX=D6)
+# LoRa Mesh Relay Node + Bus Servo — XIAO ESP32-S3 + SX1262
+# Protocol: H/R/D distance-vector mesh, fixed SF7.
+# Servo: Seeed Bus Servo Driver Board (TX=D7, RX=D6) — MG90S PWM
 #
-# Serial commands:
-#   <text>              → broadcast DATA (dst=0)
-#   TO:<dst>:<text>     → unicast DATA to node dst
-#
-# Mesh payload commands (received by this node):
-#   SERVO:<angle>           move servo ID 1 to angle (degrees, 0-300)
-#   SERVO:<id>:<angle>      move specific servo ID
-#   SERVO:<id>:<angle>:<ms> move with time budget in ms
+# Mesh payload commands:
+#   SERVO:<angle>           move servo (0-180°)
+#   SERVO:<pin>:<angle>     move servo on specific PWM pin
 
 import time
 import random
 import busio
 import digitalio
+import pwmio
 import microcontroller
 import board
 import supervisor
 import sys
 import mesh_common as mc
 from sx1262 import SX1262
-from scservo import SCServo
 
 # ── Identity ──────────────────────────────────────────────────────────────────
-NODE_ID = 2  # unique per physical board (1–255); 1 is reserved for nRF gateway
+NODE_ID = 2  # unique per board (1–255); 1 reserved for nRF gateway
 
-# ── LoRa hardware parameters ──────────────────────────────────────────────────
+# ── LoRa parameters ───────────────────────────────────────────────────────────
 MESH_FREQ = 912.0
 BW        = 125.0
 CR        = 5
@@ -52,53 +47,59 @@ try:
     spi  = busio.SPI(sck_pin, mosi_pin, miso_pin)
     lora = SX1262(spi, sck_pin, mosi_pin, miso_pin,
                   nss_pin, dio1_pin, rst_pin, busy_pin)
-    lora.begin(freq=MESH_FREQ, bw=BW, sf=mc.network_sf, cr=CR,
+    lora.begin(freq=MESH_FREQ, bw=BW, sf=mc.SF, cr=CR,
                useRegulatorLDO=True, tcxoVoltage=1.8, power=22)
-    print("Node {}  {} MHz  SF{}  TTL={}".format(NODE_ID, MESH_FREQ, mc.network_sf, mc.TTL_DEFAULT))
+    print("Node {}  {} MHz  SF{}  TTL={}".format(NODE_ID, MESH_FREQ, mc.SF, mc.TTL_DEFAULT))
 except Exception as e:
     print("LoRa FAIL: {}".format(e))
     raise
 
-servo = SCServo()
+# ── Servo (MG90S — standard PWM, 50 Hz, 500–2500 µs) ─────────────────────────
+_SERVO_PIN  = board.D7   # signal wire from Bus Servo Driver Board
+_PWM_FREQ   = 50
+_MIN_US     = 500
+_MAX_US     = 2500
+_PERIOD_US  = 1_000_000 // _PWM_FREQ   # 20000
+
+_servo_pwm = pwmio.PWMOut(_SERVO_PIN, frequency=_PWM_FREQ, duty_cycle=0)
+
+def _servo_angle(degrees):
+    degrees = max(0, min(180, float(degrees)))
+    us      = _MIN_US + (degrees / 180.0) * (_MAX_US - _MIN_US)
+    _servo_pwm.duty_cycle = int(us / _PERIOD_US * 65535)
+    print("  servo angle={:.1f}".format(degrees))
+
+def _servo_cmd(payload):
+    parts = payload[6:].split(":")
+    try:
+        if len(parts) == 1:
+            _servo_angle(parts[0])
+        else:
+            _servo_angle(parts[1])   # ignore pin field for now
+    except Exception as e:
+        print("  servo err: {}".format(e))
 
 # ── Node state ────────────────────────────────────────────────────────────────
-my_msg_id      = 0
-my_route_mid   = 0
-_serial_buf    = ''
-_active_sf     = mc.network_sf
-_sf_good_since = None
+my_msg_id    = 0
+my_route_mid = 0
+_serial_buf  = ''
 
-# ── Radio SF management ───────────────────────────────────────────────────────
-def _radio_set_sf(sf):
-    global _active_sf
-    if sf == _active_sf:
-        return
-    lora.begin(freq=MESH_FREQ, bw=BW, sf=sf, cr=CR,
-               useRegulatorLDO=True, tcxoVoltage=1.8, power=22)
-    _active_sf = sf
-    print("RADIO SF->{}".format(sf))
-
-_last_tx = 0.0
-
+# ── TX helpers ────────────────────────────────────────────────────────────────
 def _lora_tx(pkt_bytes):
-    global _last_tx
     rf_sw.value = True
     lora.send(pkt_bytes)
     rf_sw.value = False
-    _last_tx = time.monotonic()
 
 def _lora_tx_lbt(pkt_bytes):
-    global _last_tx
     for attempt in range(5):
         result = lora.recv(timeout_en=True, timeout_ms=25)
         if not (result and isinstance(result, tuple) and result[0]):
             rf_sw.value = True
             lora.send(pkt_bytes)
             rf_sw.value = False
-            _last_tx = time.monotonic()
             return
         time.sleep(0.06 * (2 ** attempt) + random.uniform(0, 0.04))
-    print("  LBT: relay dropped")
+    print("  LBT: dropped")
 
 def _relay_prob(rssi):
     if rssi > -60:  return 0.40
@@ -106,106 +107,72 @@ def _relay_prob(rssi):
     if rssi > -90:  return 0.85
     return 0.97
 
-# ── Servo command parser ──────────────────────────────────────────────────────
-def _servo_cmd(payload):
-    """Parse SERVO:<angle> | SERVO:<id>:<angle> | SERVO:<id>:<angle>:<ms>"""
-    parts = payload[6:].split(":")
-    try:
-        if len(parts) == 1:
-            servo.write_angle(1, float(parts[0]))
-            print("  servo id=1 angle={}".format(parts[0]))
-        elif len(parts) == 2:
-            servo.write_angle(int(parts[0]), float(parts[1]))
-            print("  servo id={} angle={}".format(parts[0], parts[1]))
-        elif len(parts) >= 3:
-            servo.write_angle(int(parts[0]), float(parts[1]), move_time=int(parts[2]))
-            print("  servo id={} angle={} ms={}".format(parts[0], parts[1], parts[2]))
-    except Exception as e:
-        print("  servo err: {}".format(e))
-
-# ── Transmit functions ────────────────────────────────────────────────────────
+# ── Transmit ──────────────────────────────────────────────────────────────────
 def send_hello():
-    _lora_tx(mc.encode_hello(NODE_ID, mc.network_sf))
+    _lora_tx(mc.encode_hello(NODE_ID))
 
 def send_route_ad_self():
     global my_route_mid
     my_route_mid = (my_route_mid + 1) % 256
-    _lora_tx(mc.encode_route_ad(NODE_ID, NODE_ID, my_route_mid, 0, 0))
+    _lora_tx(mc.encode_route_ad(NODE_ID, NODE_ID, my_route_mid, 0))
 
 def send_data(dst, payload):
     global my_msg_id
     my_msg_id = (my_msg_id + 1) % 256
     mc.data_mark(NODE_ID, my_msg_id)
-    if dst == 0:
-        nh = 0
-    else:
-        nh = mc.route_next_hop(dst)
-        if nh is None:
-            print("No route to N{}".format(dst))
-            return False
+    nh = 0 if dst == 0 else mc.route_next_hop(dst)
+    if dst != 0 and nh is None:
+        print("No route to N{}".format(dst))
+        return False
     _lora_tx(mc.encode_data(NODE_ID, dst, nh, my_msg_id, mc.TTL_DEFAULT, payload))
-    print("TX D dst={} nh={} mid={} '{}'".format(dst, nh, my_msg_id, payload))
+    print("TX D dst={} nh={} '{}'".format(dst, nh, payload))
     return True
 
 # ── Receive handlers ──────────────────────────────────────────────────────────
-def _handle_hello(pkt, rssi, snr):
-    src, src_sf = pkt
+def _handle_hello(src, rssi, snr):
     if src == NODE_ID:
         return
-    old_sf, new_sf = mc.neighbor_update(src, snr, rssi)
-    tag = "  ASF: SF{}->SF{}".format(old_sf, new_sf) if new_sf != old_sf else ""
-    print("H  N{} sf={} rssi={} snr={:.1f}{}".format(src, src_sf, rssi, snr, tag))
+    mc.neighbor_update(src, snr, rssi)
+    print("H  N{} rssi={} snr={:.1f}".format(src, rssi, snr))
 
 def _handle_route_ad(pkt, rssi, snr):
-    orig, fwd, mid, hops, cost = pkt
-    if orig == NODE_ID:
-        return
-    if mc.route_seen(orig, mid):
+    orig, fwd, mid, hops = pkt
+    if orig == NODE_ID or mc.route_seen(orig, mid):
         return
     mc.route_mark(orig, mid)
     mc.neighbor_update(fwd, snr, rssi)
-    improved = mc.route_update(orig, fwd, hops, cost)
-    print("R  orig={} fwd={} hops={} cost={}{}".format(
-        orig, fwd, hops, cost, " *" if improved else ""))
+    improved = mc.route_update(orig, fwd, hops)
+    print("R  orig={} fwd={} hops={}{}".format(orig, fwd, hops, " *" if improved else ""))
     if hops + 1 < mc.ROUTE_TTL:
-        nb = mc.neighbor.get(fwd)
-        link = mc.SF_AIRTIME[nb['sf']] if nb else mc.SF_AIRTIME[mc.network_sf]
         time.sleep(random.uniform(0.02, 0.12))
-        _lora_tx_lbt(mc.encode_route_ad(orig, NODE_ID, mid, hops + 1, cost + link))
+        _lora_tx_lbt(mc.encode_route_ad(orig, NODE_ID, mid, hops + 1))
 
 def _handle_data(pkt, rssi, snr):
     src, dst, next_hop, mid, ttl, payload = pkt
-    if src == NODE_ID:
-        return
-    if mc.data_seen(src, mid):
+    if src == NODE_ID or mc.data_seen(src, mid):
         return
     mc.data_mark(src, mid)
-    print("D  src={} dst={} nh={} ttl={} rssi={} '{}'".format(
-        src, dst, next_hop, ttl, rssi, payload))
+    print("D  src={} dst={} ttl={} rssi={} '{}'".format(src, dst, ttl, rssi, payload))
     if dst == 0 or dst == NODE_ID:
-        _deliver(src, dst, payload)
+        _deliver(src, payload)
     if dst == NODE_ID or ttl <= 1:
         return
     if next_hop == 0:
         if random.random() > _relay_prob(rssi):
-            print("  -> flood relay skipped (prob)")
             return
         time.sleep(random.uniform(0.05, 0.20))
         _lora_tx_lbt(mc.encode_data(src, dst, 0, mid, ttl - 1, payload))
-        print("  -> flood relay")
         return
     if next_hop != NODE_ID:
         return
     new_nh = mc.route_next_hop(dst)
     if new_nh is None:
-        print("  -> no route to N{}, drop".format(dst))
         return
     time.sleep(random.uniform(0.05, 0.15))
     _lora_tx_lbt(mc.encode_data(src, dst, new_nh, mid, ttl - 1, payload))
-    print("  -> relay to N{}".format(new_nh))
 
-def _deliver(src, dst, payload):
-    print("  v DELIVER from N{}: '{}'".format(src, payload))
+def _deliver(src, payload):
+    print("  DELIVER N{}: '{}'".format(src, payload))
     if payload.startswith("SERVO:"):
         _servo_cmd(payload)
     elif payload.startswith("PARROT:"):
@@ -214,7 +181,6 @@ def _deliver(src, dst, payload):
 
 # ── RX cycle ──────────────────────────────────────────────────────────────────
 def rx_cycle():
-    global _sf_good_since
     try:
         result = lora.recv(timeout_en=True, timeout_ms=300)
         if not (result and isinstance(result, tuple) and len(result) >= 2 and result[0]):
@@ -222,14 +188,11 @@ def rx_cycle():
         data, _ = result
         rssi = lora.getRSSI()
         snr  = lora.getSNR()
-        try:
-            s = data.decode('utf-8', 'ignore').strip()
-        except Exception:
-            return
+        s = data.decode('utf-8', 'ignore').strip()
         if s.startswith("H:"):
-            pkt = mc.decode_hello(data)
-            if pkt:
-                _handle_hello(pkt, rssi, snr)
+            src = mc.decode_hello(data)
+            if src is not None:
+                _handle_hello(src, rssi, snr)
         elif s.startswith("R:"):
             pkt = mc.decode_route_ad(data)
             if pkt:
@@ -238,19 +201,10 @@ def rx_cycle():
             pkt = mc.decode_data(data)
             if pkt:
                 _handle_data(pkt, rssi, snr)
-        if mc.network_sf_check_up():
-            _radio_set_sf(mc.network_sf)
-            _sf_good_since = None
-            print("SF^ {}".format(mc.network_sf))
-        else:
-            changed, _sf_good_since = mc.network_sf_check_down(_sf_good_since)
-            if changed:
-                _radio_set_sf(mc.network_sf)
-                print("SF_ {}".format(mc.network_sf))
     except Exception as e:
         print("RX err: {}".format(e))
 
-# ── Periodic maintenance ──────────────────────────────────────────────────────
+# ── Periodic ──────────────────────────────────────────────────────────────────
 def _periodic(now):
     global last_hello, last_route_ad, last_expire
     if now - last_hello >= mc.HELLO_INTERVAL:
@@ -263,10 +217,8 @@ def _periodic(now):
         last_expire = now
         dead_nb = mc.neighbor_expire()
         dead_rt = mc.route_expire()
-        if dead_nb:
-            print("Expired neighbors: {}".format(dead_nb))
-        if dead_rt:
-            print("Expired routes: {}".format(dead_rt))
+        if dead_nb: print("Expired nb: {}".format(dead_nb))
+        if dead_rt: print("Expired rt: {}".format(dead_rt))
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 print("Mesh servo node running — Node {}".format(NODE_ID))
