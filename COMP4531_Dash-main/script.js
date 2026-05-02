@@ -1108,7 +1108,7 @@ async function flashDevice(board) {
         await writeFile(destDir, 'mesh_common.py', commonContent);
         await writeFile(destDir, 'code.py', codeContent);
 
-        const varSuffix = useEcho ? '  [echo_node]' : useServo ? '  [servo_node]' : '';
+        const varSuffix = useServo ? '  [servo_node]' : '';
         log(`✓ ${label} Node ${nodeId} → ${destDir.name}/  [sx1262+mesh_common+code]${varSuffix}  (board restarts)`);
     } catch (e) {
         if (e.name !== 'AbortError') log(`Flash error: ${e.message}`);
