@@ -55,12 +55,15 @@ def neighbor_expire():
 route_table = {}
 # {dest_id: {'next_hop': int, 'hops': int, 'seen': float}}
 
-def route_update(orig, fwd, adv_hops):
-    """Bellman-Ford: prefer fewer hops. Returns True if route improved."""
-    existing = route_table.get(orig, {}).get('hops', 9999)
-    total    = adv_hops + 1
-    if total < existing:
-        route_table[orig] = {'next_hop': fwd, 'hops': total, 'seen': time.monotonic()}
+def route_update(orig, fwd, adv_hops, link_rssi=None):
+    """Bellman-Ford: fewer hops wins; equal hops → better RSSI wins."""
+    entry         = route_table.get(orig, {})
+    exist_hops    = entry.get('hops', 9999)
+    exist_rssi    = entry.get('link_rssi', -999)
+    total         = adv_hops + 1
+    rssi          = link_rssi if link_rssi is not None else -999
+    if total < exist_hops or (total == exist_hops and rssi > exist_rssi):
+        route_table[orig] = {'next_hop': fwd, 'hops': total, 'link_rssi': rssi, 'seen': time.monotonic()}
         return True
     return False
 

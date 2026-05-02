@@ -12,7 +12,6 @@
 import time
 import random
 import busio
-import digitalio
 import pwmio
 import microcontroller
 import board
@@ -41,12 +40,9 @@ rf_sw_pin = microcontroller.pin.GPIO38
 
 # ── Hardware init ─────────────────────────────────────────────────────────────
 try:
-    rf_sw = digitalio.DigitalInOut(rf_sw_pin)
-    rf_sw.direction = digitalio.Direction.OUTPUT
-    rf_sw.value = False
     spi  = busio.SPI(sck_pin, mosi_pin, miso_pin)
     lora = SX1262(spi, sck_pin, mosi_pin, miso_pin,
-                  nss_pin, dio1_pin, rst_pin, busy_pin)
+                  nss_pin, dio1_pin, rst_pin, busy_pin, rf_sw=rf_sw_pin)
     lora.begin(freq=MESH_FREQ, bw=BW, sf=mc.SF, cr=CR,
                useRegulatorLDO=True, tcxoVoltage=1.8, power=22)
     print("Node {}  {} MHz  SF{}  TTL={}".format(NODE_ID, MESH_FREQ, mc.SF, mc.TTL_DEFAULT))
@@ -86,20 +82,11 @@ _serial_buf  = ''
 
 # ── TX helpers ────────────────────────────────────────────────────────────────
 def _lora_tx(pkt_bytes):
-    rf_sw.value = True
     lora.send(pkt_bytes)
-    rf_sw.value = False
 
 def _lora_tx_lbt(pkt_bytes):
-    for attempt in range(5):
-        result = lora.recv(timeout_en=True, timeout_ms=25)
-        if not (result and isinstance(result, tuple) and result[0]):
-            rf_sw.value = True
-            lora.send(pkt_bytes)
-            rf_sw.value = False
-            return
-        time.sleep(0.06 * (2 ** attempt) + random.uniform(0, 0.04))
-    print("  LBT: dropped")
+    if not lora.send_lbt(pkt_bytes, max_tries=3, base_backoff_ms=20):
+        print("  LBT: dropped")
 
 def _relay_prob(rssi):
     if rssi > -60:  return 0.40
@@ -110,11 +97,13 @@ def _relay_prob(rssi):
 # ── Transmit ──────────────────────────────────────────────────────────────────
 def send_hello():
     _lora_tx(mc.encode_hello(NODE_ID))
+    print("TX H N{}".format(NODE_ID))
 
 def send_route_ad_self():
     global my_route_mid
     my_route_mid = (my_route_mid + 1) % 256
     _lora_tx(mc.encode_route_ad(NODE_ID, NODE_ID, my_route_mid, 0))
+    print("TX R mid={}".format(my_route_mid))
 
 def send_data(dst, payload):
     global my_msg_id
@@ -133,46 +122,60 @@ def _handle_hello(src, rssi, snr):
     if src == NODE_ID:
         return
     mc.neighbor_update(src, snr, rssi)
-    print("H  N{} rssi={} snr={:.1f}".format(src, rssi, snr))
+    print("RX H  src=N{} rssi={} snr={:.1f}".format(src, rssi, snr))
 
 def _handle_route_ad(pkt, rssi, snr):
     orig, fwd, mid, hops = pkt
     if orig == NODE_ID or mc.route_seen(orig, mid):
+        print("RX R  orig=N{} fwd=N{} mid={} hops={} [dup]".format(orig, fwd, mid, hops))
         return
     mc.route_mark(orig, mid)
     mc.neighbor_update(fwd, snr, rssi)
-    improved = mc.route_update(orig, fwd, hops)
-    print("R  orig={} fwd={} hops={}{}".format(orig, fwd, hops, " *" if improved else ""))
+    link_rssi = mc.neighbor.get(fwd, {}).get('rssi')
+    improved = mc.route_update(orig, fwd, hops, link_rssi)
+    r = mc.route_table.get(orig, {})
+    print("RX R  orig=N{} fwd=N{} mid={} hops={} -> nh=N{} total={} {}".format(
+        orig, fwd, mid, hops,
+        r.get('next_hop', '?'), r.get('hops', '?'),
+        "[NEW]" if improved else "[known]"))
     if hops + 1 < mc.ROUTE_TTL:
         time.sleep(random.uniform(0.02, 0.12))
+        print("  relay R orig=N{} hops={}".format(orig, hops + 1))
         _lora_tx_lbt(mc.encode_route_ad(orig, NODE_ID, mid, hops + 1))
 
 def _handle_data(pkt, rssi, snr):
     src, dst, next_hop, mid, ttl, payload = pkt
     if src == NODE_ID or mc.data_seen(src, mid):
+        print("RX D  src=N{} dst=N{} mid={} [dup/self]".format(src, dst, mid))
         return
     mc.data_mark(src, mid)
-    print("D  src={} dst={} ttl={} rssi={} '{}'".format(src, dst, ttl, rssi, payload))
+    print("RX D  src=N{} dst=N{} nh=N{} mid={} ttl={} rssi={} '{}'".format(
+        src, dst, next_hop, mid, ttl, rssi, payload))
     if dst == 0 or dst == NODE_ID:
-        _deliver(src, payload)
+        _deliver(src, dst, payload)
     if dst == NODE_ID or ttl <= 1:
         return
     if next_hop == 0:
         if random.random() > _relay_prob(rssi):
+            print("  flood relay skipped (prob)")
             return
         time.sleep(random.uniform(0.05, 0.20))
+        print("  relay D flood src=N{} dst=N{} ttl={}".format(src, dst, ttl - 1))
         _lora_tx_lbt(mc.encode_data(src, dst, 0, mid, ttl - 1, payload))
         return
     if next_hop != NODE_ID:
         return
     new_nh = mc.route_next_hop(dst)
     if new_nh is None:
+        print("  no route to N{}".format(dst))
         return
     time.sleep(random.uniform(0.05, 0.15))
+    print("  relay D unicast src=N{} dst=N{} new_nh=N{} ttl={}".format(
+        src, dst, new_nh, ttl - 1))
     _lora_tx_lbt(mc.encode_data(src, dst, new_nh, mid, ttl - 1, payload))
 
-def _deliver(src, payload):
-    print("  DELIVER N{}: '{}'".format(src, payload))
+def _deliver(src, dst, payload):
+    print("  DELIVER src={} dst={}: '{}'".format(src, dst, payload))
     if payload.startswith("SERVO:"):
         _servo_cmd(payload)
     elif payload.startswith("PARROT:"):

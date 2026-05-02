@@ -61,14 +61,11 @@ led.value = True  # OFF (active-low)
 
 lora_ok = False
 try:
-    spi   = busio.SPI(lora_sck, lora_mosi, lora_miso)
-    rf_sw = digitalio.DigitalInOut(rf_sw_pin)
-    rf_sw.direction = digitalio.Direction.OUTPUT
-    rf_sw.value = False
-    lora  = SX1262(spi, lora_sck, lora_mosi, lora_miso,
-                   lora_nss, lora_dio1, lora_rst, lora_busy)
+    spi  = busio.SPI(lora_sck, lora_mosi, lora_miso)
+    lora = SX1262(spi, lora_sck, lora_mosi, lora_miso,
+                  lora_nss, lora_dio1, lora_rst, lora_busy, rf_sw=rf_sw_pin)
     lora.begin(freq=MESH_FREQ, bw=BW, sf=mc.SF, cr=CR,
-               useRegulatorLDO=True, tcxoVoltage=1.6)
+               useRegulatorLDO=True, tcxoVoltage=1.8)
     lora_ok = True
     print("LoRa OK  {} MHz  SF{}".format(MESH_FREQ, mc.SF))
 except Exception as e:
@@ -115,20 +112,11 @@ def ble_notify(msg):
         pass
 
 def _lora_tx(pkt_bytes):
-    rf_sw.value = True
     lora.send(pkt_bytes)
-    rf_sw.value = False
 
 def _lora_tx_lbt(pkt_bytes):
-    for attempt in range(5):
-        result = lora.recv(timeout_en=True, timeout_ms=25)
-        if not (result and isinstance(result, tuple) and result[0]):
-            rf_sw.value = True
-            lora.send(pkt_bytes)
-            rf_sw.value = False
-            return
-        time.sleep(0.06 * (2 ** attempt) + random.uniform(0, 0.04))
-    print("  LBT: dropped")
+    if not lora.send_lbt(pkt_bytes, max_tries=3, base_backoff_ms=20):
+        print("  LBT: dropped")
 
 def _relay_prob(rssi):
     if rssi > -60:  return 0.40
@@ -141,6 +129,7 @@ def send_hello():
     if not lora_ok:
         return
     _lora_tx(mc.encode_hello(NODE_ID))
+    print("TX H N{}".format(NODE_ID))
 
 def send_route_ad_self():
     global my_route_mid
@@ -148,22 +137,26 @@ def send_route_ad_self():
         return
     my_route_mid = (my_route_mid + 1) % 256
     _lora_tx(mc.encode_route_ad(NODE_ID, NODE_ID, my_route_mid, 0))
+    print("TX R mid={}".format(my_route_mid))
 
 def send_data(dst, payload):
     global my_msg_id
     if not lora_ok:
         ble_notify("MESH_ERR:LORA_FAIL")
+        print("TX D  FAIL lora_ok=False")
         return False
     my_msg_id = (my_msg_id + 1) % 256
     mc.data_mark(NODE_ID, my_msg_id)
     nh = 0 if dst == 0 else mc.route_next_hop(dst)
     if dst != 0 and nh is None:
         ble_notify("MESH_ERR:NO_ROUTE:{}".format(dst))
+        print("TX D  no route to N{}".format(dst))
         return False
     pkt = mc.encode_data(NODE_ID, dst, nh, my_msg_id, mc.TTL_DEFAULT, payload)
     _lora_tx(pkt)
     ble_notify("MESH_TX:{}|{}|{}|{}|{}|{}".format(
         NODE_ID, dst, nh, my_msg_id, mc.TTL_DEFAULT, payload))
+    print("TX D  dst=N{} nh=N{} mid={} '{}'".format(dst, nh if nh else 0, my_msg_id, payload))
     return True
 
 # ── Receive handlers ──────────────────────────────────────────────────────────
@@ -172,48 +165,62 @@ def _handle_hello(src, rssi, snr):
         return
     mc.neighbor_update(src, snr, rssi)
     ble_notify("MESH_NB:{}|{}|{:.1f}".format(src, rssi, snr))
-    print("H  N{} rssi={} snr={:.1f}".format(src, rssi, snr))
+    print("RX H  src=N{} rssi={} snr={:.1f}".format(src, rssi, snr))
 
 def _handle_route_ad(pkt, rssi, snr):
     orig, fwd, mid, hops = pkt
     if orig == NODE_ID or mc.route_seen(orig, mid):
+        print("RX R  orig=N{} fwd=N{} mid={} hops={} [dup]".format(orig, fwd, mid, hops))
         return
     mc.route_mark(orig, mid)
     mc.neighbor_update(fwd, snr, rssi)
-    improved = mc.route_update(orig, fwd, hops)
+    link_rssi = mc.neighbor.get(fwd, {}).get('rssi')
+    improved = mc.route_update(orig, fwd, hops, link_rssi)
+    r = mc.route_table.get(orig, {})
+    print("RX R  orig=N{} fwd=N{} mid={} hops={} -> nh=N{} total={} {}".format(
+        orig, fwd, mid, hops,
+        r.get('next_hop', '?'), r.get('hops', '?'),
+        "[NEW]" if improved else "[known]"))
     if improved:
-        r = mc.route_table[orig]
         ble_notify("MESH_ROUTE:{}|{}|{}".format(orig, r['next_hop'], r['hops']))
-        print("Route N{}: nh={} hops={}".format(orig, r['next_hop'], r['hops']))
     if hops + 1 < mc.ROUTE_TTL:
         time.sleep(random.uniform(0.02, 0.12))
+        print("  relay R orig=N{} hops={}".format(orig, hops + 1))
         _lora_tx_lbt(mc.encode_route_ad(orig, NODE_ID, mid, hops + 1))
 
 def _handle_data(pkt, rssi, snr):
     src, dst, next_hop, mid, ttl, payload = pkt
     if src == NODE_ID or mc.data_seen(src, mid):
+        print("RX D  src=N{} dst=N{} mid={} [dup/self]".format(src, dst, mid))
         return
     mc.data_mark(src, mid)
+    print("RX D  src=N{} dst=N{} nh=N{} mid={} ttl={} rssi={} '{}'".format(
+        src, dst, next_hop, mid, ttl, rssi, payload))
     if dst == 0 or dst == NODE_ID:
         ble_notify("MESH_RX:{}|{}|{}|{}|{}|{:.1f}|{}".format(
             src, dst, mid, ttl, rssi, snr, payload))
-        _deliver(src, payload)
+        _deliver(src, dst, payload)
     if dst == NODE_ID or ttl <= 1:
         return
     if next_hop == 0:
         if random.random() > _relay_prob(rssi):
+            print("  flood relay skipped (prob)")
             return
         time.sleep(random.uniform(0.05, 0.20))
+        print("  relay D flood src=N{} dst=N{} ttl={}".format(src, dst, ttl - 1))
         _lora_tx_lbt(mc.encode_data(src, dst, 0, mid, ttl - 1, payload))
     elif next_hop == NODE_ID:
         new_nh = mc.route_next_hop(dst)
         if new_nh is None:
+            print("  no route to N{}".format(dst))
             return
         time.sleep(random.uniform(0.05, 0.15))
+        print("  relay D unicast src=N{} dst=N{} new_nh=N{} ttl={}".format(
+            src, dst, new_nh, ttl - 1))
         _lora_tx_lbt(mc.encode_data(src, dst, new_nh, mid, ttl - 1, payload))
 
-def _deliver(src, payload):
-    print("  DELIVER N{}: '{}'".format(src, payload))
+def _deliver(src, dst, payload):
+    print("  DELIVER src={} dst={}: '{}'".format(src, dst, payload))
     if payload.startswith("PARROT:"):
         time.sleep(0.15)
         send_data(src, "PONG:{}:{}".format(NODE_ID, payload[7:]))
@@ -277,7 +284,7 @@ def _periodic(now):
         mc.route_expire()
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-print("Node {}  {} MHz  SF{}".format(NODE_ID, MESH_FREQ, mc.SF))
+print("Node {}  {} MHz  SF7".format(NODE_ID, MESH_FREQ))
 blink(3)
 
 last_hello    = -random.uniform(0, mc.HELLO_INTERVAL * 0.9)

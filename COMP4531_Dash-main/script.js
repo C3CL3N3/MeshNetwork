@@ -15,10 +15,23 @@ function log(msg) {
     const isErr = msg.startsWith('Error') || msg.toLowerCase().includes('error') || msg.startsWith('Flash error');
     if (isErr) console.error('[mesh]', msg);
     else       console.log('[mesh]', msg);
-    // Update status text for connection events
+
+    // Update status dot text for connection events
     const status = document.getElementById('connStatus');
     if (status && (msg.includes('Connected') || msg.includes('disconnected') || msg.includes('Error') || msg.startsWith('Flash'))) {
         status.innerText = msg;
+    }
+
+    // Append to monitor box
+    const box = document.getElementById('monitorBox');
+    if (box) {
+        const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+        const line = document.createElement('div');
+        line.className = 'monitor-line' + (isErr ? ' monitor-err' : '');
+        line.textContent = `[${time}] ${msg}`;
+        box.appendChild(line);
+        box.scrollTop = box.scrollHeight;
+        while (box.children.length > 200) box.removeChild(box.firstChild);
     }
 }
 
@@ -329,10 +342,35 @@ function handleMeshRoute(data) {
 function handleMeshNeighbor(data) {
     // node|rssi|snr
     const [nid, rssi, snr] = data.split('|');
-    const nodeId = parseInt(nid);
+    const nodeId  = parseInt(nid);
+    const rssiVal = parseFloat(rssi);
+    const snrVal  = parseFloat(snr);
+
+    // Ensure node exists (direct neighbor = 1 hop)
+    const svgEl = document.getElementById('meshSvg');
+    const cx = svgEl ? (svgEl.clientWidth  || 600) / 2 : 300;
+    const cy = svgEl ? (svgEl.clientHeight || 400) / 2 : 200;
+    if (!meshNodes.has(nodeId)) {
+        const angle = Math.random() * Math.PI * 2;
+        meshNodes.set(nodeId, {
+            id: nodeId, hops: 1, rssi: rssiVal, snr: snrVal, msgCount: 0,
+            x: cx + Math.cos(angle) * 140, y: cy + Math.sin(angle) * 140,
+            vx: 0, vy: 0, lastSeen: Date.now()
+        });
+        document.getElementById('meshNodeCount').innerText =
+            [...meshNodes.keys()].filter(k => k !== meshMyId).length;
+        updateMeshDstSelect();
+    } else {
+        const n = meshNodes.get(nodeId);
+        n.rssi = rssiVal; n.snr = snrVal; n.lastSeen = Date.now();
+    }
+
+    // Always create/update the direct link
     const lkA = Math.min(nodeId, meshMyId), lkB = Math.max(nodeId, meshMyId);
-    const existing = meshLinks.get(`${lkA}-${lkB}`);
-    if (existing) { existing.rssi = parseFloat(rssi); existing.snr = parseFloat(snr); meshD3Update(); }
+    meshLinks.set(`${lkA}-${lkB}`, { rssi: rssiVal, snr: snrVal, hops: 0, lastActive: Date.now() });
+
+    updateMeshNodeList();
+    meshD3Update();
     addMeshLog(`neighbor N${nid}: rssi=${rssi} snr=${snr}`, 'rt');
 }
 
@@ -862,21 +900,6 @@ async function sendMesh() {
     }
 }
 
-async function sendServo() {
-    if (!writeChar) { log('Not connected'); return; }
-    const id    = parseInt(document.getElementById('servoId').value) || 1;
-    const angle = parseInt(document.getElementById('servoSlider').value);
-    const sel   = document.getElementById('meshDstSelect');
-    const dst   = sel ? sel.value : '0';
-    const msg   = `SERVO:${id}:${angle}`;
-    log(`→ SERVO N${id} @ ${angle}° → dst ${dst === '0' ? 'broadcast' : `N${dst}`}`);
-    if (dst === '0') {
-        await send('SEND_MESH:' + msg);
-    } else {
-        await send(`SEND_NODE:${dst}:${msg}`);
-    }
-}
-
 // =============================================
 // SERIAL (ESP32)
 // =============================================
@@ -902,6 +925,7 @@ async function connectSerial() {
         document.getElementById('serialSendRow').style.display = 'flex';
         document.getElementById('serialBtn').textContent = 'disconnect_serial';
         document.getElementById('serialBtn').onclick = disconnectSerial;
+        _serialTabSetUI(true);
         log('ESP32 serial connected (TX + RX)');
     } catch (e) {
         if (e.name !== 'NotFoundError') log('Serial error: ' + e.message);
@@ -916,15 +940,39 @@ async function _serialReadLoop(reader) {
             if (done) break;
             buf += value;
             const lines = buf.split('\n');
-            buf = lines.pop(); // keep incomplete line
+            buf = lines.pop();
             lines.forEach(line => {
                 const t = line.trim();
                 if (!t) return;
-                // Route mesh protocol lines to mesh log, rest to terminal
+
+                // Classify for mesh log colour
                 const type = t.startsWith('TX') ? 'tx'
-                           : t.startsWith('D ') || t.startsWith('H ') || t.startsWith('R ') ? 'rx'
+                           : t.startsWith('RX')  ? 'rx'
                            : 'rt';
                 addMeshLog(`[esp32] ${t}`, type);
+
+                // Raw terminal in serial tab
+                const rawBox = document.getElementById('serialRawLog');
+                if (rawBox) {
+                    const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+                    const line = document.createElement('div');
+                    line.className = 'monitor-line' + (t.startsWith('RX') ? '' : t.startsWith('TX') ? ' monitor-tx' : '');
+                    line.textContent = `[${time}] ${t}`;
+                    rawBox.appendChild(line);
+                    rawBox.scrollTop = rawBox.scrollHeight;
+                    while (rawBox.children.length > 300) rawBox.removeChild(rawBox.firstChild);
+                }
+
+                // Parse DELIVER → incoming chat bubble (src/dst routing)
+                const dlv = t.match(/DELIVER src=(\d+) dst=(\d+):\s*'?(.*?)'?\s*$/);
+                if (dlv) {
+                    const _src = parseInt(dlv[1]), _dst = parseInt(dlv[2]);
+                    addSerialChatBubble(dlv[3], 'in', _dst === 0 ? 0 : _src);
+                }
+
+                // Parse RX H / RX D → node discovery for dst selector
+                const rxNode = t.match(/RX [HD]\s+src=N(\d+)/);
+                if (rxNode) _serialTabNodeAdd(parseInt(rxNode[1]));
             });
         }
     } catch (_) { /* port closed */ }
@@ -939,6 +987,7 @@ async function disconnectSerial() {
     document.getElementById('serialSendRow').style.display = 'none';
     const btn = document.getElementById('serialBtn');
     if (btn) { btn.textContent = 'Connect Serial'; btn.onclick = connectSerial; }
+    _serialTabSetUI(false);
     log('ESP32 serial disconnected');
 }
 
@@ -954,6 +1003,96 @@ async function sendSerial(msg) {
         log('Serial write error: ' + e.message);
     }
 }
+
+// =============================================
+// SERIAL TAB — per-node conversations
+// =============================================
+let _serialActiveConv = 0;  // 0 = broadcast
+
+function _serialTabSetUI(connected) {
+    const btn   = document.getElementById('serialTabConnBtn');
+    const badge = document.getElementById('serialTabBadge');
+    if (btn)   btn.textContent = connected ? 'disconnect_usb' : 'connect_usb';
+    if (badge) { badge.textContent = connected ? 'connected' : 'disconnected'; badge.style.color = connected ? 'var(--ok)' : ''; }
+}
+
+function _serialEnsureConv(id) {
+    if (document.getElementById(`serialChat-${id}`)) return;
+
+    const pane = document.createElement('div');
+    pane.id = `serialChat-${id}`;
+    pane.className = 'chat-area serial-chat-pane';
+    document.getElementById('serialChatWrap').appendChild(pane);
+
+    const item = document.createElement('div');
+    item.className = 'serial-conv-item';
+    item.dataset.convid = String(id);
+    item.onclick = () => serialSelectConv(id);
+    item.innerHTML = `<span class="conv-name">${id}</span><span class="conv-badge" id="convBadge-${id}"></span>`;
+    document.getElementById('serialConvList').appendChild(item);
+}
+
+function _serialTabNodeAdd(id) {
+    _serialEnsureConv(id);
+}
+
+function serialSelectConv(id) {
+    _serialActiveConv = id;
+    document.querySelectorAll('.serial-chat-pane').forEach(p => p.classList.remove('active-pane'));
+    const pane = document.getElementById(`serialChat-${id}`);
+    if (pane) pane.classList.add('active-pane');
+    document.querySelectorAll('.serial-conv-item').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll(`.serial-conv-item[data-convid="${id}"]`).forEach(el => el.classList.add('active'));
+    const title = document.getElementById('serialChatTitle');
+    if (title) title.textContent = id === 0 ? 'broadcast' : String(id);
+    const badge = document.getElementById(`convBadge-${id}`);
+    if (badge) badge.textContent = '';
+}
+
+function addSerialChatBubble(text, type, srcId) {
+    const convId = type === 'in' ? (srcId ?? 0) : _serialActiveConv;
+    if (type === 'in') _serialEnsureConv(convId);
+
+    const box = document.getElementById(`serialChat-${convId}`);
+    if (!box) return;
+    if (box.querySelector('.chat-placeholder')) box.innerHTML = '';
+
+    const div = document.createElement('div');
+    div.className = `msg ${type}`;
+    const txt = document.createElement('span');
+    txt.textContent = text;
+    div.appendChild(txt);
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+
+    if (type === 'in' && convId !== _serialActiveConv) {
+        const badge = document.getElementById(`convBadge-${convId}`);
+        if (badge) badge.textContent = (parseInt(badge.textContent) || 0) + 1;
+    }
+}
+
+async function serialTabToggle() {
+    if (_serialPort) await disconnectSerial();
+    else             await connectSerial();
+}
+
+async function serialTabSend() {
+    const input = document.getElementById('serialMsgInput');
+    if (!input || !input.value.trim()) return;
+    if (!_serialWriter) { log('Serial not connected'); return; }
+
+    const text = input.value.trim();
+    const dst  = _serialActiveConv;
+    const cmd  = dst === 0 ? text : `TO:${dst}:${text}`;
+
+    try {
+        await _serialWriter.write(cmd + '\n');
+        addSerialChatBubble(text, 'out', null);
+        addMeshLog(`→ ESP32 serial: "${cmd}"`, 'tx');
+    } catch (e) { log('Serial write error: ' + e.message); }
+    input.value = '';
+}
+
 
 // =============================================
 // FIRMWARE FLASH  — persistent CIRCUITPY handles via IndexedDB

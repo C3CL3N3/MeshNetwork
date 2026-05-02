@@ -20,6 +20,7 @@
             <button class="nav-btn active" onclick="setTab('home')">connect</button>
             <button class="nav-btn" onclick="setTab('lora')">lora</button>
             <button class="nav-btn" onclick="setTab('mesh')">mesh</button>
+            <button class="nav-btn" onclick="setTab('serial')">serial</button>
             <button class="nav-btn" onclick="setTab('sim')">sim</button>
         </nav>
     </header>
@@ -91,6 +92,9 @@
                 </div>
                 <p class="flash-hint">// first flash: pick CIRCUITPY drive once — auto after</p>
             </div>
+
+            <hr class="md-divider" data-label="monitor" style="margin-top:16px;">
+            <div id="monitorBox" class="monitor-box"></div>
         </div>
     </section>
 
@@ -117,6 +121,51 @@
             <div class="chat-input-area">
                 <input type="text" id="loraTxt" placeholder="type '1m', '5 meters'… to plot RSSI">
                 <button class="btn-send" onclick="sendLoRa()">send</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── serial ───────────────────────────────────────────────────────────── -->
+    <section id="view-serial" class="view-section">
+        <div class="serial-shell">
+            <!-- top bar -->
+            <div class="serial-topbar">
+                <span class="card-header-title">esp32_serial_chat</span>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <span id="serialTabBadge" class="badge">disconnected</span>
+                    <button id="serialTabConnBtn" class="btn-secondary small" onclick="serialTabToggle()">connect_usb</button>
+                </div>
+            </div>
+            <div class="serial-body">
+                <!-- left: conversation list -->
+                <aside class="serial-conv-sidebar">
+                    <div class="serial-conv-header">conversations</div>
+                    <div id="serialConvList">
+                        <div class="serial-conv-item active" data-convid="0" onclick="serialSelectConv(0)">
+                            <span class="conv-name">broadcast</span>
+                            <span class="conv-badge" id="convBadge-0"></span>
+                        </div>
+                    </div>
+                </aside>
+                <!-- right: chat + terminal -->
+                <div class="serial-chat-right">
+                    <div class="serial-chat-titlebar">
+                        <span id="serialChatTitle">broadcast</span>
+                    </div>
+                    <div id="serialChatWrap" class="serial-chat-wrap">
+                        <!-- per-conversation chat areas injected here -->
+                        <div id="serialChat-0" class="chat-area serial-chat-pane active-pane">
+                            <div class="chat-placeholder">// connect ESP32 via USB</div>
+                        </div>
+                    </div>
+                    <div class="chat-input-area">
+                        <input type="text" id="serialMsgInput" placeholder="message…"
+                               onkeydown="if(event.key==='Enter') serialTabSend()">
+                        <button class="btn-send" onclick="serialTabSend()">send</button>
+                    </div>
+                    <hr class="md-divider" data-label="raw_serial" style="margin:6px 0 4px;">
+                    <div id="serialRawLog" class="monitor-box" style="height:150px;"></div>
+                </div>
             </div>
         </div>
     </section>
@@ -243,20 +292,6 @@
 
             <div class="mesh-section-label">discovered_nodes</div>
             <div id="meshNodeList" style="margin-bottom:16px; flex:1; min-height:0; overflow-y:auto;"></div>
-
-            <hr class="md-divider" data-label="servo_control" style="margin-bottom:12px;">
-
-            <div class="mesh-compose" style="margin-bottom:4px; gap:6px;">
-                <label style="font-size:11px;white-space:nowrap;">id</label>
-                <input type="number" id="servoId" value="1" min="1" max="253"
-                       style="width:44px; padding:4px 6px; font-size:12px;">
-                <label style="font-size:11px;white-space:nowrap;">angle</label>
-                <input type="range" id="servoSlider" min="0" max="300" value="150" step="1"
-                       style="flex:1;" oninput="document.getElementById('servoAngleLbl').innerText=this.value+'°'">
-                <span id="servoAngleLbl" style="font-size:11px;min-width:32px;">150°</span>
-                <button class="btn-primary small" onclick="sendServo()">GO</button>
-            </div>
-            <p class="flash-hint" style="margin-bottom:12px;">// sends SERVO:&lt;id&gt;:&lt;angle&gt; to selected destination</p>
 
             <hr class="md-divider" data-label="esp32_serial" style="margin-bottom:12px;">
 

@@ -515,3 +515,76 @@ input:focus {
 }
 .sim-legend-item { display: flex; align-items: center; gap: 3px; }
 .sim-legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+/* monitor box — connect panel */
+.monitor-box {
+    margin-top: 8px;
+    height: 180px;
+    overflow-y: auto;
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    padding: 6px 8px;
+    font-family: var(--font);
+    font-size: 11px;
+    color: #7ee787;
+}
+.monitor-line { line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+.monitor-err  { color: #f85149; }
+.monitor-tx { color: #79c0ff; }
+
+/* serial tab layout */
+.serial-shell {
+    display: flex; flex-direction: column;
+    width: 100%; height: 100%; overflow: hidden;
+}
+.serial-topbar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    background: var(--surface); flex-shrink: 0;
+}
+.serial-body {
+    display: flex; flex: 1; overflow: hidden;
+}
+.serial-conv-sidebar {
+    width: 140px; flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    background: var(--bg);
+    display: flex; flex-direction: column; overflow: hidden;
+}
+.serial-conv-header {
+    font-size: 10px; font-weight: 700; color: var(--text-muted);
+    padding: 10px 12px 6px; text-transform: uppercase; letter-spacing: 0.05em;
+    flex-shrink: 0;
+}
+.serial-conv-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 12px; cursor: pointer; font-size: 12px;
+    border-left: 2px solid transparent;
+    transition: background 0.1s;
+}
+.serial-conv-item:hover   { background: var(--surface); }
+.serial-conv-item.active  { background: var(--surface); border-left-color: var(--accent); }
+.conv-name  { font-weight: 600; color: var(--text-dim); }
+.conv-badge {
+    font-size: 10px; font-weight: 700; color: #fff;
+    background: var(--accent); border-radius: 8px;
+    padding: 1px 5px; min-width: 14px; text-align: center;
+}
+.conv-badge:empty { display: none; }
+
+.serial-chat-right {
+    flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 0 12px 8px;
+}
+.serial-chat-titlebar {
+    padding: 10px 0 6px; font-weight: 700; font-size: 13px;
+    color: var(--text-dim); border-bottom: 1px solid var(--border-sub);
+    flex-shrink: 0; margin-bottom: 6px;
+}
+.serial-chat-wrap {
+    flex: 1; position: relative; overflow: hidden; min-height: 0;
+}
+.serial-chat-pane {
+    display: none; position: absolute; inset: 0; overflow-y: auto;
+}
+.serial-chat-pane.active-pane { display: flex; }
