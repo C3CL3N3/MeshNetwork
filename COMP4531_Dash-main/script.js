@@ -12,16 +12,14 @@ let loraGraphData = [];
 // UI & LOGGING
 // =============================================
 function log(msg) {
-    const t = document.getElementById('terminal');
-    if (!t) return;
-    const time = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    const cls  = msg.startsWith('✓') || msg.includes('Connected') ? 'log-ok'
-               : msg.startsWith('Error') || msg.includes('error')  ? 'log-err' : '';
-    const span = document.createElement('span');
-    span.className = 'log-line';
-    span.innerHTML = `<span class="log-time">[${time}]</span> <span class="${cls}">${msg}</span>`;
-    t.appendChild(span);
-    t.scrollTop = t.scrollHeight;
+    const isErr = msg.startsWith('Error') || msg.toLowerCase().includes('error') || msg.startsWith('Flash error');
+    if (isErr) console.error('[mesh]', msg);
+    else       console.log('[mesh]', msg);
+    // Update status text for connection events
+    const status = document.getElementById('connStatus');
+    if (status && (msg.includes('Connected') || msg.includes('disconnected') || msg.includes('Error') || msg.startsWith('Flash'))) {
+        status.innerText = msg;
+    }
 }
 
 function setTab(id) {
@@ -138,7 +136,10 @@ async function connect() {
         log(`Connecting Group ${gid}…`);
 
         device = await navigator.bluetooth.requestDevice({
-            filters:          [{ services: [_gattUUIDs.svc] }],
+            filters:          [
+                { services: [_gattUUIDs.svc] },
+                { name: `MESH_G${gid}` },
+            ],
             optionalServices: [_gattUUIDs.svc],
         });
         device.addEventListener('gattserverdisconnected', onDisconnect);
@@ -156,7 +157,6 @@ async function connect() {
         document.getElementById('meshMsgCount').innerText  = '0';
         document.getElementById('meshNodeCount').innerText = '0';
         document.getElementById('meshMyNodeId').innerText  = `N${gid}`;
-        document.getElementById('meshNetSf').innerText     = '—';
 
         const svg = document.getElementById('meshSvg');
         const w = svg ? svg.clientWidth  : 600;

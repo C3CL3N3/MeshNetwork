@@ -33,7 +33,7 @@
 
             <div class="field">
                 <label>group_id</label>
-                <input type="number" id="gid" value="" min="1" max="30" placeholder="1–30">
+                <input type="number" id="gid" value="13" min="1" max="30" placeholder="1–30">
             </div>
 
             <div class="action-row">
@@ -45,8 +45,6 @@
                 <div id="statusDot" class="dot"></div>
                 <span id="connStatus">disconnected</span>
             </div>
-
-            <div class="code-block" id="terminal"><!-- system ready --></div>
 
             <hr class="md-divider" data-label="flash_firmware">
 
@@ -92,13 +90,6 @@
                     </div>
                 </div>
                 <p class="flash-hint">// first flash: pick CIRCUITPY drive once — auto after</p>
-
-                <hr class="md-divider" data-label="node_log">
-                <div class="action-row" style="gap:6px;margin-top:4px;">
-                    <button class="btn-secondary" onclick="downloadLog('nrf')"  >↓ log · nrf</button>
-                    <button class="btn-secondary" onclick="downloadLog('esp32')">↓ log · esp32</button>
-                </div>
-                <p class="flash-hint">// logging active after flash — double-tap reset → safe mode to re-flash</p>
             </div>
         </div>
     </section>
@@ -231,11 +222,10 @@
     <section id="view-mesh" class="view-section">
         <aside class="glass-sidebar">
             <h2 class="sidebar-title">mesh_network</h2>
-            <p class="sidebar-sub">adaptive spreading factor · distance-vector routing</p>
+            <p class="sidebar-sub">SF7 · distance-vector routing</p>
 
             <table class="stats-table" style="margin-bottom:16px;">
                 <tr><td>my_node</td><td id="meshMyNodeId">—</td></tr>
-                <tr><td>network_sf</td><td id="meshNetSf">—</td></tr>
                 <tr><td>nodes_seen</td><td id="meshNodeCount">0</td></tr>
                 <tr><td>msg_count</td><td id="meshMsgCount">0</td></tr>
             </table>
