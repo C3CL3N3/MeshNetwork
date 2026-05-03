@@ -17,11 +17,9 @@
             <span class="brand-name">lora_mesh_dashboard</span>
         </div>
         <nav class="segmented-control">
-            <button class="nav-btn active" onclick="setTab('home')">connect</button>
-            <button class="nav-btn" onclick="setTab('lora')">lora</button>
-            <button class="nav-btn" onclick="setTab('mesh')">mesh</button>
-            <button class="nav-btn" onclick="setTab('serial')">serial</button>
-            <button class="nav-btn" onclick="setTab('sim')">sim</button>
+            <button type="button" class="nav-btn active" onclick="setTab('home')">connect</button>
+            <button type="button" class="nav-btn" onclick="setTab('mesh')">mesh</button>
+            <button type="button" class="nav-btn" onclick="setTab('serial')">serial</button>
         </nav>
     </header>
 
@@ -34,12 +32,13 @@
 
             <div class="field">
                 <label>group_id</label>
-                <input type="number" id="gid" value="13" min="1" max="30" placeholder="1–30">
+                <input type="number" id="gid" value="13" min="1" max="30" placeholder="1–30"
+                       onkeydown="if(event.key==='Enter')event.preventDefault()">
             </div>
 
             <div class="action-row">
-                <button id="conBtn" class="btn-primary" onclick="connect()">connect</button>
-                <button id="disBtn" class="btn-danger" onclick="disconnect()" disabled>disconnect</button>
+                <button type="button" id="conBtn" class="btn-primary" onclick="connect()">connect</button>
+                <button type="button" id="disBtn" class="btn-danger" onclick="disconnect()" disabled>disconnect</button>
             </div>
 
             <div class="status-line">
@@ -52,26 +51,34 @@
             <div class="flash-section">
                 <div class="flash-node-row">
                     <span class="flash-node-label">node_id</span>
-                    <input type="number" id="flashNodeId" value="2" min="1" max="255" class="flash-node-input">
+                    <div class="variant-ctrl" id="nodeIdCtrl">
+                        <button type="button" class="var-btn" onclick="setFlashNodeId(1,this)">1</button>
+                        <button type="button" class="var-btn active" onclick="setFlashNodeId(2,this)">2</button>
+                        <button type="button" class="var-btn" onclick="setFlashNodeId(3,this)">3</button>
+                        <button type="button" class="var-btn" onclick="setFlashNodeId(4,this)">4</button>
+                        <button type="button" class="var-btn" onclick="setFlashNodeId(5,this)">5</button>
+                        <button type="button" class="var-btn" onclick="setFlashNodeId(6,this)">6</button>
+                        <button type="button" class="var-btn" onclick="setFlashNodeId(7,this)">7</button>
+                    </div>
                 </div>
                 <!-- esp32 variant toggle -->
                 <div class="flash-variant-row">
                     <span class="flash-node-label">esp32_fw</span>
                     <div class="variant-ctrl">
-                        <button id="varBtnStd"   class="var-btn active" onclick="setEsp32Variant('standard',this)">standard</button>
-                        <button id="varBtnServo" class="var-btn"        onclick="setEsp32Variant('servo',this)">servo_node</button>
+                        <button type="button" id="varBtnStd"   class="var-btn active" onclick="setEsp32Variant('standard',this)">standard</button>
+                        <button type="button" id="varBtnServo" class="var-btn"        onclick="setEsp32Variant('servo',this)">servo_node</button>
                     </div>
                 </div>
                 <p class="flash-hint" id="esp32FwHint" style="margin-bottom:8px;">// relay node — participates in mesh routing</p>
 
                 <div class="action-row" style="margin-bottom:8px;">
-                    <button class="btn-flash" id="btnFlashNrf" onclick="flashDevice('nrf')">
+                    <button type="button" class="btn-flash" id="btnFlashNrf" onclick="flashDevice('nrf')">
                         <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style="margin-right:5px">
                             <path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
                         </svg>
                         flash nrf52840
                     </button>
-                    <button class="btn-flash" id="btnFlashEsp" onclick="flashDevice('esp32')">
+                    <button type="button" class="btn-flash" id="btnFlashEsp" onclick="flashDevice('esp32')">
                         <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style="margin-right:5px">
                             <path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
                         </svg>
@@ -82,12 +89,12 @@
                     <div class="flash-drive-row">
                         <span class="flash-drive-label">nrf_drive:</span>
                         <span class="flash-drive-name" id="driveName-nrf">–</span>
-                        <button class="btn-forget" id="forgetBtn-nrf" onclick="forgetDrive('nrf')" style="display:none">✕</button>
+                        <button type="button" class="btn-forget" id="forgetBtn-nrf" onclick="forgetDrive('nrf')" style="display:none">✕</button>
                     </div>
                     <div class="flash-drive-row">
                         <span class="flash-drive-label">esp32_drive:</span>
                         <span class="flash-drive-name" id="driveName-esp32">–</span>
-                        <button class="btn-forget" id="forgetBtn-esp32" onclick="forgetDrive('esp32')" style="display:none">✕</button>
+                        <button type="button" class="btn-forget" id="forgetBtn-esp32" onclick="forgetDrive('esp32')" style="display:none">✕</button>
                     </div>
                 </div>
                 <p class="flash-hint">// first flash: pick CIRCUITPY drive once — auto after</p>
@@ -95,33 +102,6 @@
 
             <hr class="md-divider" data-label="monitor" style="margin-top:16px;">
             <div id="monitorBox" class="monitor-box"></div>
-        </div>
-    </section>
-
-    <!-- ── lora ──────────────────────────────────────────────────────────────── -->
-    <section id="view-lora" class="view-section">
-        <div class="lora-card">
-            <div class="card-header">
-                <span class="card-header-title">lora_messenger</span>
-                <span id="loraBadge" class="badge">--- MHz</span>
-            </div>
-            <div class="lora-controls">
-                <button class="btn-secondary small" onclick="downloadLoraCSV()">↓ export_csv</button>
-            </div>
-            <div id="loraGraphPanel" style="display:none;">
-                <div class="graph-header">
-                    <span>rssi_vs_distance</span>
-                    <span id="loraGraphPoints" style="color:var(--text-muted)">0 pts</span>
-                </div>
-                <canvas id="loraChartCanvas" style="height:120px; width:100%; display:block;"></canvas>
-            </div>
-            <div id="loraChat" class="chat-area">
-                <div class="chat-placeholder">// no messages yet</div>
-            </div>
-            <div class="chat-input-area">
-                <input type="text" id="loraTxt" placeholder="type '1m', '5 meters'… to plot RSSI">
-                <button class="btn-send" onclick="sendLoRa()">send</button>
-            </div>
         </div>
     </section>
 
@@ -133,7 +113,7 @@
                 <span class="card-header-title">esp32_serial_chat</span>
                 <div style="display:flex;gap:8px;align-items:center;">
                     <span id="serialTabBadge" class="badge">disconnected</span>
-                    <button id="serialTabConnBtn" class="btn-secondary small" onclick="serialTabToggle()">connect_usb</button>
+                    <button type="button" id="serialTabConnBtn" class="btn-secondary small" onclick="serialTabToggle()">connect_usb</button>
                 </div>
             </div>
             <div class="serial-body">
@@ -161,110 +141,13 @@
                     <div class="chat-input-area">
                         <input type="text" id="serialMsgInput" placeholder="message…"
                                onkeydown="if(event.key==='Enter') serialTabSend()">
-                        <button class="btn-send" onclick="serialTabSend()">send</button>
+                        <button type="button" class="btn-send" onclick="serialTabSend()">send</button>
                     </div>
                     <hr class="md-divider" data-label="raw_serial" style="margin:6px 0 4px;">
                     <div id="serialRawLog" class="monitor-box" style="height:150px;"></div>
                 </div>
             </div>
         </div>
-    </section>
-
-    <!-- ── sim ───────────────────────────────────────────────────────────────── -->
-    <section id="view-sim" class="view-section">
-        <aside class="glass-sidebar">
-            <h2 class="sidebar-title">sim_scenario</h2>
-            <p class="sidebar-sub">friis path loss · bellman-ford routing · network SF</p>
-
-            <div class="sim-group">
-                <label class="sim-label">nodes <span class="sim-val" id="simNodeCountVal">6</span></label>
-                <input type="range" id="simNodeCount" min="2" max="20" value="6"
-                       oninput="document.getElementById('simNodeCountVal').textContent=this.value">
-            </div>
-
-            <div class="sim-group">
-                <label class="sim-label">topology</label>
-                <select id="simTopology">
-                    <option value="random">random</option>
-                    <option value="grid">grid</option>
-                    <option value="line">line</option>
-                    <option value="ring">ring</option>
-                    <option value="star">star</option>
-                </select>
-            </div>
-
-            <div class="sim-group">
-                <label class="sim-label">area <span class="sim-val" id="simAreaVal">1000m</span></label>
-                <input type="range" id="simArea" min="100" max="5000" step="100" value="1000"
-                       oninput="document.getElementById('simAreaVal').textContent=this.value+'m'">
-            </div>
-
-            <div class="sim-group">
-                <label class="sim-label">environment</label>
-                <select id="simEnv">
-                    <option value="2.0:0">free_space (n=2.0)</option>
-                    <option value="2.7:6">suburban (n=2.7)</option>
-                    <option value="3.5:8" selected>urban (n=3.5)</option>
-                    <option value="4.0:10">indoor (n=4.0)</option>
-                    <option value="4.5:12">dense_urban (n=4.5)</option>
-                </select>
-            </div>
-
-            <div class="sim-group">
-                <label class="sim-label">tx_power</label>
-                <select id="simTxPower">
-                    <option value="14">14 dBm</option>
-                    <option value="17">17 dBm</option>
-                    <option value="20">20 dBm</option>
-                    <option value="22" selected>22 dBm</option>
-                </select>
-            </div>
-
-            <div class="sim-group">
-                <label class="sim-label">interference <span class="sim-val" id="simInterferenceVal">0%</span></label>
-                <input type="range" id="simInterference" min="0" max="80" value="0"
-                       oninput="document.getElementById('simInterferenceVal').textContent=this.value+'%'">
-            </div>
-
-            <div class="sim-group">
-                <label class="sim-label">node_failure <span class="sim-val" id="simFailureVal">0%</span></label>
-                <input type="range" id="simFailure" min="0" max="50" value="0"
-                       oninput="document.getElementById('simFailureVal').textContent=this.value+'%'">
-            </div>
-
-            <button class="btn-primary" style="margin:10px 0 6px; width:100%;" onclick="simGenerate()">↺ generate</button>
-
-            <hr class="md-divider" data-label="send_packet" style="margin:10px 0 12px;">
-
-            <div class="sim-group">
-                <label class="sim-label">from → to</label>
-                <div style="display:flex; gap:6px; align-items:center;">
-                    <select id="simSrc" class="sim-select-inline"></select>
-                    <span style="color:var(--text-muted);">→</span>
-                    <select id="simDst" class="sim-select-inline"></select>
-                </div>
-            </div>
-
-            <div class="sim-group">
-                <label class="sim-label">mode</label>
-                <select id="simMode">
-                    <option value="routed">routed_mesh</option>
-                    <option value="flood">naive_flood</option>
-                    <option value="direct">direct_SF12</option>
-                    <option value="compare">compare_all</option>
-                </select>
-            </div>
-
-            <button class="btn-secondary small" style="width:100%; margin-top:6px;"
-                    onclick="simSendPacket()">↑ simulate_packet</button>
-
-            <div id="simPacketResult" class="sim-packet-result"></div>
-        </aside>
-
-        <main class="sim-main">
-            <div id="simViz"><svg id="simSvg"></svg></div>
-            <div id="simResults"></div>
-        </main>
     </section>
 
     <!-- ── mesh ──────────────────────────────────────────────────────────────── -->
@@ -287,7 +170,7 @@
                 </select>
                 <input type="text" id="meshMsgInput" placeholder="message…"
                        onkeydown="if(event.key==='Enter') sendMesh()">
-                <button class="btn-primary small" onclick="sendMesh()">↑</button>
+                <button type="button" class="btn-primary small" onclick="sendMesh()">↑</button>
             </div>
 
             <div class="mesh-section-label">discovered_nodes</div>
@@ -295,11 +178,11 @@
 
             <hr class="md-divider" data-label="esp32_serial" style="margin-bottom:12px;">
 
-            <button class="btn-secondary small" id="serialBtn" onclick="connectSerial()" style="margin-bottom:8px;">connect_serial</button>
+            <button type="button" class="btn-secondary small" id="serialBtn" onclick="connectSerial()" style="margin-bottom:8px;">connect_serial</button>
             <div class="mesh-send-row" id="serialSendRow" style="display:none;">
                 <input type="text" id="serialInput" placeholder="send via esp32…"
                        onkeydown="if(event.key==='Enter') sendSerial()">
-                <button class="btn-primary small" onclick="sendSerial()">TX</button>
+                <button type="button" class="btn-primary small" onclick="sendSerial()">TX</button>
             </div>
         </aside>
 

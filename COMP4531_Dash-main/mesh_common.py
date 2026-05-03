@@ -64,6 +64,7 @@ def route_update(orig, fwd, adv_hops, link_rssi=None):
     rssi          = link_rssi if link_rssi is not None else -999
     if total < exist_hops or (total == exist_hops and rssi > exist_rssi):
         route_table[orig] = {'next_hop': fwd, 'hops': total, 'link_rssi': rssi, 'seen': time.monotonic()}
+        _dtn_wake(orig)
         return True
     return False
 
@@ -77,6 +78,55 @@ def route_expire():
 def route_next_hop(dst):
     r = route_table.get(dst)
     return r['next_hop'] if r else None
+
+# ── DTN relay queue ───────────────────────────────────────────────────────────
+_dtn_queue   = []
+DTN_TTL_S    = 30   # max hold time (s)
+DTN_RETRY_S  = 3.0  # retry interval (s)
+DTN_QUEUE_MAX = 16
+
+def dtn_enqueue(src, dst, mid, ttl, payload):
+    if ttl <= 0:
+        return
+    for m in _dtn_queue:
+        if m['src'] == src and m['mid'] == mid:
+            return  # already queued
+    now = time.monotonic()
+    if len(_dtn_queue) >= DTN_QUEUE_MAX:
+        _dtn_queue.pop(0)
+    _dtn_queue.append({'src': src, 'dst': dst, 'mid': mid, 'ttl': ttl,
+                       'payload': payload, 'born': now, 'next_try': now + DTN_RETRY_S})
+    print("DTN queue src=N{} dst=N{} mid={} ttl={}".format(src, dst, mid, ttl))
+
+def _dtn_wake(dst):
+    """Immediately retry queued packets when a route to dst appears."""
+    now = time.monotonic()
+    for m in _dtn_queue:
+        if m['dst'] == dst:
+            m['next_try'] = now
+
+def dtn_tick(tx_fn):
+    """Call from _periodic(). tx_fn(pkt_bytes) should be _lora_tx_lbt."""
+    now  = time.monotonic()
+    keep = []
+    for m in _dtn_queue:
+        if now - m['born'] > DTN_TTL_S:
+            print("DTN expire src=N{} dst=N{} mid={}".format(m['src'], m['dst'], m['mid']))
+            continue
+        if now < m['next_try']:
+            keep.append(m)
+            continue
+        nh = route_next_hop(m['dst'])
+        if nh is None:
+            m['next_try'] = now + DTN_RETRY_S
+            keep.append(m)
+            continue
+        pkt = encode_data(m['src'], m['dst'], nh, m['mid'], m['ttl'], m['payload'])
+        print("DTN deliver src=N{} dst=N{} nh=N{} mid={}".format(
+            m['src'], m['dst'], nh, m['mid']))
+        tx_fn(pkt)
+        # delivered — drop from queue
+    _dtn_queue[:] = keep
 
 # ── Packet encode / decode ────────────────────────────────────────────────────
 

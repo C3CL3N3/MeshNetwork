@@ -42,6 +42,7 @@ try:
                   nss_pin, dio1_pin, rst_pin, busy_pin, rf_sw=rf_sw_pin)
     lora.begin(freq=MESH_FREQ, bw=BW, sf=mc.SF, cr=CR,
                useRegulatorLDO=True, tcxoVoltage=1.8, power=22)
+    lora.recv_start()
     print("Node {}  {} MHz  SF{}  TTL={}".format(NODE_ID, MESH_FREQ, mc.SF, mc.TTL_DEFAULT))
 except Exception as e:
     print("LoRa FAIL: {}".format(e))
@@ -55,10 +56,12 @@ _serial_buf  = ''
 # ── TX helpers ────────────────────────────────────────────────────────────────
 def _lora_tx(pkt_bytes):
     lora.send(pkt_bytes)
+    lora.recv_start()
 
 def _lora_tx_lbt(pkt_bytes):
     if not lora.send_lbt(pkt_bytes, max_tries=3, base_backoff_ms=20):
         print("  LBT: dropped")
+    lora.recv_start()
 
 def _relay_prob(rssi):
     if rssi > -60:  return 0.40
@@ -139,7 +142,7 @@ def _handle_data(pkt, rssi, snr):
         return
     new_nh = mc.route_next_hop(dst)
     if new_nh is None:
-        print("  no route to N{}".format(dst))
+        mc.dtn_enqueue(src, dst, mid, ttl - 1, payload)
         return
     time.sleep(random.uniform(0.05, 0.15))
     print("  relay D unicast src=N{} dst=N{} new_nh=N{} ttl={}".format(
@@ -152,11 +155,14 @@ def _deliver(src, dst, payload):
         time.sleep(0.15)
         send_data(src, "PONG:{}:{}".format(NODE_ID, payload[7:]))
 
-# ── RX cycle ──────────────────────────────────────────────────────────────────
-def rx_cycle():
+# ── RX poll (non-blocking) ────────────────────────────────────────────────────
+def rx_poll():
     try:
-        result = lora.recv(timeout_en=True, timeout_ms=300)
-        if not (result and isinstance(result, tuple) and len(result) >= 2 and result[0]):
+        result = lora.recv_poll()
+        if result is None:
+            return
+        if not (result[0]):
+            lora.recv_start()
             return
         data, _ = result
         rssi = lora.getRSSI()
@@ -174,8 +180,10 @@ def rx_cycle():
             pkt = mc.decode_data(data)
             if pkt:
                 _handle_data(pkt, rssi, snr)
+        lora.recv_start()
     except Exception as e:
         print("RX err: {}".format(e))
+        lora.recv_start()
 
 # ── Periodic ──────────────────────────────────────────────────────────────────
 def _periodic(now):
@@ -192,6 +200,7 @@ def _periodic(now):
         dead_rt = mc.route_expire()
         if dead_nb: print("Expired nb: {}".format(dead_nb))
         if dead_rt: print("Expired rt: {}".format(dead_rt))
+    mc.dtn_tick(_lora_tx_lbt)
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 print("Mesh relay running — Node {}".format(NODE_ID))
@@ -217,13 +226,13 @@ while True:
                     if text.startswith("TO:"):
                         parts = text[3:].split(":", 1)
                         if len(parts) == 2:
-                            send_data(int(parts[0]), parts[1])
+                            send_data(int(parts[0]), "[{}] {}".format(NODE_ID, parts[1]))
                         else:
                             print("Usage: TO:<dst>:<message>")
                     else:
-                        send_data(0, text)
+                        send_data(0, "[{}] {}".format(NODE_ID, text))
     except Exception as e:
         print("Serial err: {}".format(e))
 
-    rx_cycle()
-    time.sleep(0.01)
+    rx_poll()
+    time.sleep(0.001)

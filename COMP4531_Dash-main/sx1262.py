@@ -101,9 +101,11 @@ class SX1262:
         def _in(pin):
             if isinstance(pin, digitalio.DigitalInOut):
                 pin.direction = digitalio.Direction.INPUT
+                pin.pull = None
                 return pin
             p = digitalio.DigitalInOut(pin)
             p.direction = digitalio.Direction.INPUT
+            p.pull = None
             return p
 
         self._spi  = spi
@@ -218,28 +220,32 @@ class SX1262:
     # == Initialisation ========================================================
 
     def begin(self, freq=912.0, bw=125.0, sf=7, cr=5, power=22,
-              tcxoVoltage=1.8, useRegulatorLDO=False):
+              tcxoVoltage=1.8, useRegulatorLDO=False, debug=False):
         """Configure radio. Call once at startup; call again to change SF/freq."""
         self._sf = sf; self._bw = bw; self._freq = freq; self._cr = cr
 
-        # Hard reset
+        if debug: print("SX1262 begin: reset")
         self._rst.value = False; time.sleep(0.002)
         self._rst.value = True;  time.sleep(0.012)
         self._wait_busy(500)
 
+        if debug: print("SX1262 begin: standby")
         self._cmd(_SET_STANDBY, 0x00)           # STDBY_RC
 
         self._cmd(_SET_REGULATOR_MODE, 0x00 if useRegulatorLDO else 0x01)
 
         if tcxoVoltage > 0:
+            if debug: print("SX1262 begin: TCXO")
             v = {1.6:0x00, 1.7:0x01, 1.8:0x02, 2.2:0x03,
                  2.4:0x04, 2.7:0x05, 3.0:0x06, 3.3:0x07}.get(tcxoVoltage, 0x02)
-            self._cmd(_SET_DIO3_TCXO, v, 0x00, 0x01, 0x40)  # delay ~5 ms
-            time.sleep(0.010)
+            self._cmd(_SET_DIO3_TCXO, v, 0x00, 0x02, 0x80)  # delay ~10 ms (was 5)
+            time.sleep(0.015)
 
+        if debug: print("SX1262 begin: calibrate")
         self._cmd(_CALIBRATE, 0xFF)
-        time.sleep(0.020); self._wait_busy(500)
+        time.sleep(0.050); self._wait_busy(1000)  # nRF needs more time post-cal
 
+        if debug: print("SX1262 begin: image cal")
         f1, f2 = _image_cal_bytes(freq)
         self._cmd(_CALIBRATE_IMAGE, f1, f2)
         self._wait_busy(500)

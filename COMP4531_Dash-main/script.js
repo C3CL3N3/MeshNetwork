@@ -4,9 +4,6 @@
 let currentTab = 'home';
 let device, server, service, writeChar, notifyChar;
 
-// LoRa metrics & graphing
-let loraCsvRows  = [["Timestamp", "Direction", "Message", "LoRa_SNR", "LoRa_RSSI", "Hops"]];
-let loraGraphData = [];
 
 // =============================================
 // UI & LOGGING
@@ -46,9 +43,7 @@ function setTab(id) {
     const btn = document.querySelector(`button[onclick="setTab('${id}')"]`);
     if (btn) btn.classList.add('active');
 
-    if (id === 'lora' && loraGraphData.length > 0) setTimeout(drawLoraRssiChart, 100);
     if (id === 'mesh') setTimeout(meshResize, 50);
-    if (id === 'sim')  setTimeout(() => { if (!simState) simGenerate(); else _simDraw(null); }, 50);
 }
 
 // =============================================
@@ -136,7 +131,6 @@ async function connect() {
         const freq  = 900 + (gid - 1);
         const badge = document.querySelector('.badge');
         if (badge) badge.innerText = `${freq} MHz`;
-        document.getElementById('loraBadge').innerText = `${freq} MHz`;
 
         _gattUUIDs = {
             svc:    `${base}40-4150-b42d-22f30b0a0499`,
@@ -149,10 +143,7 @@ async function connect() {
         log(`Connecting Group ${gid}…`);
 
         device = await navigator.bluetooth.requestDevice({
-            filters:          [
-                { services: [_gattUUIDs.svc] },
-                { name: `MESH_G${gid}` },
-            ],
+            filters:          [{ name: `MESH_G${gid}` }],
             optionalServices: [_gattUUIDs.svc],
         });
         device.addEventListener('gattserverdisconnected', onDisconnect);
@@ -161,22 +152,22 @@ async function connect() {
         _setConnectedUI('ok');
         _startKeepalive();
 
-        // Initialise mesh topology
-        meshMyId = gid;
+        // Initialise mesh topology — use sentinel id=0 until MESH_INFO gives real NODE_ID
+        meshMyId = 0;
         meshNodes.clear();
         meshLinks.clear();
         meshParticles.length = 0;
         meshMsgCount = 0;
         document.getElementById('meshMsgCount').innerText  = '0';
         document.getElementById('meshNodeCount').innerText = '0';
-        document.getElementById('meshMyNodeId').innerText  = `N${gid}`;
+        document.getElementById('meshMyNodeId').innerText  = '…';
 
         const svg = document.getElementById('meshSvg');
         const w = svg ? svg.clientWidth  : 600;
         const h = svg ? svg.clientHeight : 400;
-        meshNodes.set(meshMyId, {
-            id: meshMyId, hops: 0, rssi: 0, snr: 0, msgCount: 0,
-            x: w / 2, y: h / 2,
+        meshNodes.set(0, {
+            id: 0, hops: 0, rssi: 0, snr: 0, msgCount: 0,
+            x: w / 2, y: h / 2, fx: w / 2, fy: h / 2,
             vx: 0, vy: 0, lastSeen: Date.now()
         });
         meshD3Update();
@@ -215,57 +206,6 @@ async function send(cmd) {
     } catch (e) { log('Tx Error: ' + e); }
 }
 
-// =============================================
-// LORA PLOTTING & CHAT
-// =============================================
-function drawLoraRssiChart() {
-    const cv = document.getElementById('loraChartCanvas');
-    if (!cv || loraGraphData.length === 0) return;
-
-    const cx   = cv.getContext('2d');
-    const w    = cv.width  = cv.clientWidth;
-    const h    = cv.height = cv.clientHeight;
-    cx.clearRect(0, 0, w, h);
-
-    const padX = 40, padY = 20;
-    const minX = loraGraphData[0].dist;
-    const maxX = Math.max(loraGraphData[loraGraphData.length - 1].dist, minX + 1);
-    const minY = -130, maxY = -10;
-
-    function getX(val) { return padX + ((val - minX) / (maxX - minX)) * (w - padX * 2); }
-    function getY(val) { return padY + (1 - ((val - minY) / (maxY - minY))) * (h - padY * 2); }
-
-    cx.font = "10px 'JetBrains Mono', monospace";
-    cx.textAlign = 'right';
-    cx.textBaseline = 'middle';
-    cx.fillStyle = '#8C959F';
-
-    [-130, -100, -70, -40, -10].forEach(tick => {
-        const yPos = getY(tick);
-        cx.fillText(tick, padX - 8, yPos);
-        cx.beginPath(); cx.strokeStyle = 'rgba(0,0,0,0.05)';
-        cx.moveTo(padX, yPos); cx.lineTo(w - 10, yPos); cx.stroke();
-    });
-
-    cx.strokeStyle = 'rgba(0,0,0,0.15)';
-    cx.beginPath(); cx.moveTo(padX, padY); cx.lineTo(padX, h - padY); cx.lineTo(w - 10, h - padY); cx.stroke();
-
-    cx.strokeStyle = '#0969DA'; cx.lineWidth = 2; cx.beginPath();
-    loraGraphData.forEach((pt, i) => {
-        if (i === 0) cx.moveTo(getX(pt.dist), getY(pt.lora));
-        else cx.lineTo(getX(pt.dist), getY(pt.lora));
-    });
-    cx.stroke();
-
-    cx.font = "10px 'JetBrains Mono', monospace";
-    cx.textAlign = 'center';
-    loraGraphData.forEach(pt => {
-        cx.fillStyle = '#0969DA';
-        cx.beginPath(); cx.arc(getX(pt.dist), getY(pt.lora), 4, 0, Math.PI * 2); cx.fill();
-        cx.fillStyle = '#8C959F';
-        cx.fillText(pt.dist + 'm', getX(pt.dist), h - 5);
-    });
-}
 
 function handleControlData(e) {
     const msg = new TextDecoder().decode(e.target.value);
@@ -374,35 +314,6 @@ function handleMeshNeighbor(data) {
     addMeshLog(`neighbor N${nid}: rssi=${rssi} snr=${snr}`, 'rt');
 }
 
-async function sendLoRa() {
-    const input = document.getElementById('loraTxt');
-    if (input && input.value) {
-        await send("SEND_MESH:" + input.value);
-        addChatBubble(input.value, 'out');
-        loraCsvRows.push([new Date().toISOString(), "TX", input.value, "", "", ""]);
-        input.value = "";
-    }
-}
-
-function downloadLoraCSV() {
-    if (loraCsvRows.length < 2) { alert("No LoRa data to download yet."); return; }
-    const content = loraCsvRows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([content], { type: 'text/csv' }));
-    a.download = `lora_metrics_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.csv`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-}
-
-function addChatBubble(txt, type) {
-    const box = document.getElementById('loraChat');
-    if (!box) return;
-    if (box.querySelector('.chat-placeholder')) box.innerHTML = '';
-    const div = document.createElement('div');
-    div.className = `msg ${type}`;
-    div.innerHTML = txt;
-    box.appendChild(div);
-    box.scrollTop = box.scrollHeight;
-}
 
 // =============================================
 // MESH NETWORK
@@ -622,7 +533,7 @@ function meshD3Update() {
     nodeMerge.select('text.node-label')
         .attr('font-size', d => d.id === meshMyId ? '12px' : '11px')
         .attr('fill', d => d.id === meshMyId ? '#FFFFFF' : '#1F2328')
-        .text(d => `N${d.id}`);
+        .text(d => d.id === 0 ? '?' : `N${d.id}`);
 
     nodeMerge.select('text.node-sublabel')
         .attr('dy', d => (d.id === meshMyId ? 26 : 20) + 14)
@@ -780,23 +691,34 @@ function handleMeshInfo(data) {
     }
     if (nodeId === meshMyId) return;
 
-    // Move the "YOU" node from the old meshMyId to the real NODE_ID
+    // Move gateway placeholder node to the real NODE_ID
+    const svgEl = document.getElementById('meshSvg');
+    const cx = svgEl ? svgEl.clientWidth  / 2 : 300;
+    const cy = svgEl ? svgEl.clientHeight / 2 : 200;
     const oldNode = meshNodes.get(meshMyId);
     meshNodes.delete(meshMyId);
     meshMyId = nodeId;
-    if (oldNode) { oldNode.id = meshMyId; meshNodes.set(meshMyId, oldNode); }
-    else {
-        const svgEl = document.getElementById('meshSvg');
+    if (oldNode) {
+        oldNode.id = meshMyId;
+        oldNode.fx = cx; oldNode.fy = cy;
+        meshNodes.set(meshMyId, oldNode);
+    } else {
         meshNodes.set(meshMyId, {
             id: meshMyId, hops: 0, rssi: 0, snr: 0, msgCount: 0,
-            x: svgEl ? svgEl.clientWidth  / 2 : 300,
-            y: svgEl ? svgEl.clientHeight / 2 : 200,
+            x: cx, y: cy, fx: cx, fy: cy,
             vx: 0, vy: 0, lastSeen: Date.now()
         });
     }
     document.getElementById('meshMyNodeId').innerText = `N${meshMyId}`;
     log(`Gateway NODE_ID = ${meshMyId}`);
     meshD3Update();
+
+    // Pull current topology snapshot from gateway
+    setTimeout(async () => {
+        await send('NEIGHBORS');
+        await new Promise(r => setTimeout(r, 150));
+        await send('ROUTES');
+    }, 200);
 }
 
 function handleMeshRx(data) {
@@ -841,23 +763,6 @@ function handleMeshRx(data) {
 
     const hopStr = hops === 0 ? 'direct' : `${hops} hop${hops > 1 ? 's' : ''}`;
     addMeshLog(`N${src} [${hopStr}] RSSI:${rssi} SNR:${snr}  "${payload}"`, 'rx');
-
-    // Mirror to LoRa chat so both tabs stay in sync
-    addChatBubble(
-        `${payload}\n<span style="font-size:0.75rem;opacity:0.7">[N${src} · ${hopStr} · RSSI:${rssi} · SNR:${snr}]</span>`,
-        'in'
-    );
-    loraCsvRows.push([new Date().toISOString(), "RX", payload, snr, rssi, hops]);
-
-    // Auto-plot if payload is a distance string ("1m", "5 meters", …)
-    const distMatch = payload.match(/^([\d.]+)\s*m(eter(s)?)?$/i);
-    if (distMatch) {
-        const distance = parseFloat(distMatch[1]);
-        loraGraphData.push({ dist: distance, lora: rssi });
-        loraGraphData.sort((a, b) => a.dist - b.dist);
-        document.getElementById('loraGraphPanel').style.display = 'block';
-        drawLoraRssiChart();
-    }
 }
 
 function handleMeshTx(data) {
@@ -889,9 +794,6 @@ async function sendMesh() {
     const sel = document.getElementById('meshDstSelect');
     const dst = sel ? sel.value : '0';
     input.value = '';
-
-    addChatBubble(msg, 'out');
-    loraCsvRows.push([new Date().toISOString(), "TX", msg, "", "", ""]);
 
     if (dst === '0') {
         await send('SEND_MESH:' + msg);
@@ -973,6 +875,23 @@ async function _serialReadLoop(reader) {
                 // Parse RX H / RX D → node discovery for dst selector
                 const rxNode = t.match(/RX [HD]\s+src=N(\d+)/);
                 if (rxNode) _serialTabNodeAdd(parseInt(rxNode[1]));
+
+                // ── Serial → mesh viz ─────────────────────────────────────
+                // Node identity: startup print OR periodic TX H (catches late-connect)
+                const mId = t.match(/^Node (\d+)\s/) || t.match(/^TX H N(\d+)/);
+                if (mId) _serialMeshSetId(parseInt(mId[1]));
+
+                // RX H: direct neighbor
+                const mH = t.match(/RX H\s+src=N(\d+)\s+rssi=(-?\d+)\s+snr=([-\d.]+)/);
+                if (mH) _serialMeshNeighbor(parseInt(mH[1]), parseInt(mH[2]), parseFloat(mH[3]));
+
+                // RX R [NEW]: route learned
+                const mR = t.match(/RX R\s+orig=N(\d+) fwd=N\d+ mid=\d+ hops=\d+ -> nh=N(\d+) total=(\d+) \[NEW\]/);
+                if (mR) _serialMeshRoute(parseInt(mR[1]), parseInt(mR[2]), parseInt(mR[3]));
+
+                // RX D: data packet (update src node stats)
+                const mD = t.match(/RX D\s+src=N(\d+) dst=N\d+ nh=N\d+ mid=\d+ ttl=(\d+) rssi=(-?\d+)/);
+                if (mD) _serialMeshData(parseInt(mD[1]), parseInt(mD[2]), parseInt(mD[3]));
             });
         }
     } catch (_) { /* port closed */ }
@@ -1002,6 +921,59 @@ async function sendSerial(msg) {
     } catch (e) {
         log('Serial write error: ' + e.message);
     }
+}
+
+// =============================================
+// SERIAL → MESH VIZ
+// =============================================
+let _serialMyId = null;
+
+function _serialMeshSetId(id) {
+    if (_serialMyId === id) return;
+    _serialMyId = id;
+    if (writeChar) return; // BLE active — it owns the viz
+    meshMyId = id;
+    document.getElementById('meshMyNodeId').innerText = `N${id}`;
+    meshNodes.clear(); meshLinks.clear(); meshParticles.length = 0;
+    meshMsgCount = 0;
+    document.getElementById('meshMsgCount').innerText = '0';
+    document.getElementById('meshNodeCount').innerText = '0';
+    const svgEl = document.getElementById('meshSvg');
+    const cx = svgEl ? svgEl.clientWidth / 2 : 300;
+    const cy = svgEl ? svgEl.clientHeight / 2 : 200;
+    meshNodes.set(id, { id, hops: 0, rssi: 0, snr: 0, msgCount: 0,
+        x: cx, y: cy, fx: cx, fy: cy, vx: 0, vy: 0, lastSeen: Date.now() });
+    meshD3Update();
+    log(`serial node: N${id}`);
+}
+
+function _serialMeshNeighbor(nid, rssi, snr) {
+    if (writeChar) return;
+    meshAddOrUpdate(nid, 1, rssi, snr);
+    if (_serialMyId) {
+        const a = Math.min(nid, _serialMyId), b = Math.max(nid, _serialMyId);
+        meshLinks.set(`${a}-${b}`, { rssi, snr, hops: 0, lastActive: Date.now() });
+        meshD3Update();
+    }
+}
+
+function _serialMeshRoute(orig, nh, totalHops) {
+    if (writeChar) return;
+    if (!meshNodes.has(orig)) meshAddOrUpdate(orig, totalHops, 0, 0);
+    else { meshNodes.get(orig).hops = totalHops; meshNodes.get(orig).lastSeen = Date.now(); }
+    if (_serialMyId && nh !== _serialMyId && !meshNodes.has(nh))
+        meshAddOrUpdate(nh, Math.max(1, totalHops - 1), 0, 0);
+    const a = Math.min(orig, nh), b = Math.max(orig, nh);
+    meshLinks.set(`${a}-${b}`, { rssi: 0, snr: 0, hops: totalHops - 1, lastActive: Date.now() });
+    updateMeshNodeList(); updateMeshDstSelect(); meshD3Update();
+}
+
+function _serialMeshData(src, ttl, rssi) {
+    if (writeChar) return;
+    const hops = TTL_DEFAULT - ttl;
+    meshAddOrUpdate(src, hops > 0 ? hops : 1, rssi, 0);
+    meshMsgCount++;
+    document.getElementById('meshMsgCount').innerText = meshMsgCount;
 }
 
 // =============================================
@@ -1168,8 +1140,15 @@ async function forgetDrive(board) {
     log(`Drive forgotten for ${board}.`);
 }
 
-// ── Variant toggle ────────────────────────────────────────────────────────────
+// ── Variant / node-id toggles ─────────────────────────────────────────────────
 let _esp32Variant = 'standard';
+let _flashNodeId  = 2;
+
+function setFlashNodeId(n, btn) {
+    _flashNodeId = n;
+    btn.closest('#nodeIdCtrl').querySelectorAll('.var-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+}
 
 function setEsp32Variant(v, btn) {
     _esp32Variant = v;
@@ -1187,7 +1166,7 @@ async function flashDevice(board) {
         return;
     }
 
-    const nodeId   = parseInt(document.getElementById('flashNodeId').value) || 1;
+    const nodeId   = _flashNodeId;
     const label    = board === 'nrf' ? 'nRF52840' : 'ESP32-S3';
     const useServo = board === 'esp32' && _esp32Variant === 'servo';
     const codeFile = board === 'nrf' ? 'code_nrf.py'
@@ -1293,481 +1272,15 @@ async function loraParrotTest() {
 }
 
 // =============================================
-// SCENARIO SIMULATOR
-// =============================================
-
-const SIM_SF_AIRTIME   = { 7: 41, 8: 72, 9: 144, 10: 289, 11: 577, 12: 1154 };
-const SIM_NOISE_FLOOR  = -174 + 10 * Math.log10(125000) + 6; // ≈ -117 dBm (BW=125kHz, NF=6dB)
-
-let simState   = null;
-let simSvgRoot = null;
-
-// ── Physics helpers ───────────────────────────────────────────────────────────
-function _gaussRand(mu, sigma) {
-    let u; do { u = Math.random(); } while (u === 0);
-    let v; do { v = Math.random(); } while (v === 0);
-    return mu + sigma * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-}
-
-function _friisRSSI(distM, txDbm, n, sigmaDb) {
-    const lambda  = 3e8 / 912e6;                              // ~0.329 m
-    const plRef   = 20 * Math.log10(4 * Math.PI / lambda);   // free-space PL at 1 m ≈ 71.8 dB
-    const pl      = plRef + 10 * n * Math.log10(Math.max(distM, 0.5));
-    const shadow  = sigmaDb > 0 ? _gaussRand(0, sigmaDb) : 0;
-    return txDbm - pl - shadow;
-}
-
-// SF from SNR — mirrors mesh_common.py SF_HOLD thresholds (step-up boundaries)
-function _bestSF(snr) {
-    if (snr >= -2.5)  return 7;
-    if (snr >= -5.0)  return 8;
-    if (snr >= -7.5)  return 9;
-    if (snr >= -10.0) return 10;
-    if (snr >= -12.5) return 11;
-    if (snr >= -17.5) return 12;
-    return null; // out of range
-}
-
-// ── Node placement ────────────────────────────────────────────────────────────
-function _simPlaceNodes(count, topology, areaM) {
-    const nodes = [];
-    if (topology === 'grid') {
-        const cols = Math.ceil(Math.sqrt(count));
-        const rows = Math.ceil(count / cols);
-        const dx = areaM / (cols + 1), dy = areaM / (rows + 1);
-        for (let i = 0; i < count; i++)
-            nodes.push({ id: i + 1, mx: dx * (i % cols + 1), my: dy * (Math.floor(i / cols) + 1) });
-    } else if (topology === 'line') {
-        const dx = areaM / (count + 1);
-        for (let i = 0; i < count; i++)
-            nodes.push({ id: i + 1, mx: dx * (i + 1), my: areaM / 2 });
-    } else if (topology === 'ring') {
-        const cx = areaM / 2, cy = areaM / 2, r = areaM * 0.4;
-        for (let i = 0; i < count; i++) {
-            const a = (2 * Math.PI * i / count) - Math.PI / 2;
-            nodes.push({ id: i + 1, mx: cx + r * Math.cos(a), my: cy + r * Math.sin(a) });
-        }
-    } else if (topology === 'star') {
-        const cx = areaM / 2, cy = areaM / 2, r = areaM * 0.38;
-        nodes.push({ id: 1, mx: cx, my: cy });
-        for (let i = 1; i < count; i++) {
-            const a = (2 * Math.PI * (i - 1) / (count - 1)) - Math.PI / 2;
-            nodes.push({ id: i + 1, mx: cx + r * Math.cos(a), my: cy + r * Math.sin(a) });
-        }
-    } else { // random
-        for (let i = 0; i < count; i++)
-            nodes.push({ id: i + 1, mx: 50 + Math.random() * (areaM - 100), my: 50 + Math.random() * (areaM - 100) });
-    }
-    return nodes;
-}
-
-// ── Bellman-Ford (bidirectional edges) ────────────────────────────────────────
-function _bellmanFord(nodes, edges, srcId) {
-    const dist = {}, prev = {};
-    nodes.forEach(n => { dist[n.id] = n.id === srcId ? 0 : Infinity; });
-
-    for (let iter = 0; iter < nodes.length; iter++) {
-        let changed = false;
-        edges.forEach(e => {
-            if (!isFinite(e.cost)) return;
-            if (dist[e.src] + e.cost < dist[e.dst]) {
-                dist[e.dst] = dist[e.src] + e.cost; prev[e.dst] = e.src; changed = true;
-            }
-            if (dist[e.dst] + e.cost < dist[e.src]) {
-                dist[e.src] = dist[e.dst] + e.cost; prev[e.src] = e.dst; changed = true;
-            }
-        });
-        if (!changed) break;
-    }
-
-    function getPath(dstId) {
-        if (dstId === srcId) return [srcId];
-        if (!isFinite(dist[dstId])) return null;
-        const path = []; let cur = dstId, guard = 0;
-        while (cur !== srcId && guard++ < 30) { path.unshift(cur); cur = prev[cur]; }
-        if (cur !== srcId) return null;
-        return [srcId, ...path];
-    }
-    return { dist, getPath };
-}
-
-// ── Main generate ─────────────────────────────────────────────────────────────
-function simGenerate() {
-    const count   = parseInt(document.getElementById('simNodeCount').value);
-    const topo    = document.getElementById('simTopology').value;
-    const areaM   = parseInt(document.getElementById('simArea').value);
-    const envParts = document.getElementById('simEnv').value.split(':');
-    const n       = parseFloat(envParts[0]);
-    const sigma   = parseFloat(envParts[1]);
-    const txPow   = parseInt(document.getElementById('simTxPower').value);
-    const intPct  = parseInt(document.getElementById('simInterference').value) / 100;
-    const failPct = parseInt(document.getElementById('simFailure').value) / 100;
-
-    const nodes = _simPlaceNodes(count, topo, areaM);
-
-    // Apply random failures (never fail node 1 = gateway)
-    nodes.forEach((nd, i) => { nd.failed = i > 0 && Math.random() < failPct; });
-
-    const active = nodes.filter(nd => !nd.failed);
-
-    // Compute pairwise links
-    const links = [];
-    for (let i = 0; i < active.length; i++) {
-        for (let j = i + 1; j < active.length; j++) {
-            const a = active[i], b = active[j];
-            const dist  = Math.sqrt((a.mx - b.mx) ** 2 + (a.my - b.my) ** 2);
-            const rssi  = _friisRSSI(dist, txPow, n, sigma);
-            const snr   = rssi - SIM_NOISE_FLOOR;
-            const sf    = _bestSF(snr);
-            if (sf === null) continue;
-            links.push({
-                src:  a.id, dst: b.id,
-                distM: Math.round(dist),
-                rssi: Math.round(rssi),
-                snr:  Math.round(snr * 10) / 10,
-                sf,
-                cost: SIM_SF_AIRTIME[sf],
-            });
-        }
-    }
-
-    // Network-wide SF = worst (highest SF) of all direct links
-    const networkSF = links.length > 0 ? Math.max(...links.map(l => l.sf)) : 7;
-
-    // Routing tables from every non-failed node
-    const routes = {};
-    active.forEach(nd => { routes[nd.id] = _bellmanFord(active, links, nd.id); });
-
-    simState = { nodes, active, links, routes, networkSF, areaM, intPct };
-
-    _simPopulateSelects();
-    _simDraw(null);
-    _simShowResults();
-}
-
-// ── Populate from/to selects ──────────────────────────────────────────────────
-function _simPopulateSelects() {
-    if (!simState) return;
-    const active = simState.active;
-    ['simSrc', 'simDst'].forEach((elId, idx) => {
-        const sel = document.getElementById(elId);
-        const prev = sel.value;
-        sel.innerHTML = '';
-        active.forEach(nd => {
-            const opt = document.createElement('option');
-            opt.value = nd.id; opt.textContent = `N${nd.id}`;
-            if (idx === 0 && nd.id === 1) opt.selected = true;
-            if (idx === 1 && nd.id === active[active.length - 1].id && !prev) opt.selected = true;
-            sel.appendChild(opt);
-        });
-        if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
-    });
-}
-
-// ── D3 draw ───────────────────────────────────────────────────────────────────
-function _simDraw(highlightPath) {
-    if (!simState || !simSvgRoot) return;
-    const { nodes, links, networkSF, areaM } = simState;
-
-    const svgEl = document.getElementById('simSvg');
-    const W = svgEl ? (svgEl.clientWidth  || 800) : 800;
-    const H = svgEl ? (svgEl.clientHeight || 480) : 480;
-    const PAD = 48;
-    const scale = Math.min((W - 2 * PAD) / areaM, (H - 2 * PAD) / areaM);
-    const ox = (W - areaM * scale) / 2;
-    const oy = (H - areaM * scale) / 2;
-    const px = m => ox + m * scale;
-    const py = m => oy + m * scale;
-
-    // Area border
-    simSvgRoot.selectAll('.sim-area-rect, .sim-net-sf, .sim-scalebar, .sim-legend-g').remove();
-    simSvgRoot.insert('rect', ':first-child').attr('class', 'sim-area-rect')
-        .attr('x', ox).attr('y', oy)
-        .attr('width', areaM * scale).attr('height', areaM * scale)
-        .attr('fill', 'none').attr('stroke', '#D0D7DE').attr('stroke-dasharray', '6,4');
-
-    // Network SF label
-    simSvgRoot.append('text').attr('class', 'sim-net-sf')
-        .attr('x', ox + 6).attr('y', oy - 8)
-        .attr('font-family', "'JetBrains Mono', monospace").attr('font-size', '11px')
-        .attr('fill', sfColor(networkSF))
-        .text(`network_sf: SF${networkSF}  (${SIM_SF_AIRTIME[networkSF]}ms/hop)`);
-
-    // Scale bar (bottom-right)
-    const barM = Math.round(areaM / 4 / 100) * 100 || 100;
-    const barPx = barM * scale;
-    const bx = ox + areaM * scale - barPx - 4, by = oy + areaM * scale + 14;
-    const sbg = simSvgRoot.append('g').attr('class', 'sim-scalebar');
-    sbg.append('line').attr('x1', bx).attr('y1', by).attr('x2', bx + barPx).attr('y2', by)
-        .attr('stroke', '#8C959F').attr('stroke-width', 1.5);
-    sbg.append('line').attr('x1', bx).attr('y1', by - 3).attr('x2', bx).attr('y2', by + 3)
-        .attr('stroke', '#8C959F').attr('stroke-width', 1.5);
-    sbg.append('line').attr('x1', bx + barPx).attr('y1', by - 3).attr('x2', bx + barPx).attr('y2', by + 3)
-        .attr('stroke', '#8C959F').attr('stroke-width', 1.5);
-    sbg.append('text').attr('x', bx + barPx / 2).attr('y', by + 11)
-        .attr('font-family', "'JetBrains Mono', monospace").attr('font-size', '9px')
-        .attr('fill', '#8C959F').attr('text-anchor', 'middle').text(`${barM}m`);
-
-    // SF color legend (top-right)
-    const lgx = ox + areaM * scale - 4, lgy = oy + 6;
-    const lgG = simSvgRoot.append('g').attr('class', 'sim-legend-g');
-    [7, 8, 9, 10, 11, 12].forEach((sf, i) => {
-        lgG.append('circle').attr('cx', lgx - 10).attr('cy', lgy + i * 13 + 4).attr('r', 4)
-            .attr('fill', sfColor(sf));
-        lgG.append('text').attr('x', lgx - 18).attr('y', lgy + i * 13 + 8)
-            .attr('font-family', "'JetBrains Mono', monospace").attr('font-size', '9px')
-            .attr('fill', '#8C959F').attr('text-anchor', 'end').text(`SF${sf}`);
-    });
-
-    // Highlighted path set
-    const hlSet = new Set();
-    if (highlightPath) {
-        for (let i = 0; i < highlightPath.length - 1; i++) {
-            const a = Math.min(highlightPath[i], highlightPath[i+1]);
-            const b = Math.max(highlightPath[i], highlightPath[i+1]);
-            hlSet.add(`${a}-${b}`);
-        }
-    }
-
-    // ── Links ──────────────────────────────────────────────────────────────────
-    const linksG  = simSvgRoot.select('.sim-links');
-    const linkSel = linksG.selectAll('g.sim-link').data(links, d => `${d.src}-${d.dst}`);
-
-    const linkEnter = linkSel.enter().append('g').attr('class', 'sim-link');
-    linkEnter.append('line');
-    linkEnter.append('text')
-        .attr('font-family', "'JetBrains Mono', monospace").attr('font-size', '9px')
-        .attr('text-anchor', 'middle').attr('pointer-events', 'none');
-
-    const linkMerge = linkEnter.merge(linkSel);
-    linkMerge.each(function(d) {
-        const na = nodes.find(n => n.id === d.src);
-        const nb = nodes.find(n => n.id === d.dst);
-        if (!na || !nb) return;
-        const key = `${Math.min(d.src, d.dst)}-${Math.max(d.src, d.dst)}`;
-        const hl = hlSet.has(key);
-        const col = sfColor(d.sf);
-        d3.select(this).select('line')
-            .attr('x1', px(na.mx)).attr('y1', py(na.my))
-            .attr('x2', px(nb.mx)).attr('y2', py(nb.my))
-            .attr('stroke', col)
-            .attr('stroke-width', hl ? 3 : 1.5)
-            .attr('stroke-opacity', hl ? 1 : 0.25);
-        const mx = (px(na.mx) + px(nb.mx)) / 2;
-        const my = (py(na.my) + py(nb.my)) / 2;
-        d3.select(this).select('text')
-            .attr('x', mx).attr('y', my - 5)
-            .attr('fill', hl ? col : '#8C959F')
-            .attr('opacity', hl ? 1 : 0.6)
-            .text(hl ? `SF${d.sf} · ${d.rssi}dBm · ${d.distM}m` : `SF${d.sf}`);
-    });
-    linkSel.exit().remove();
-
-    // ── Nodes ──────────────────────────────────────────────────────────────────
-    const nodesG  = simSvgRoot.select('.sim-nodes');
-    const nodeSel = nodesG.selectAll('g.sim-node').data(nodes, d => d.id);
-
-    const nodeEnter = nodeSel.enter().append('g').attr('class', 'sim-node').style('cursor', 'pointer')
-        .on('click', (event, d) => {
-            if (d.failed) return;
-            const src = document.getElementById('simSrc');
-            const dst = document.getElementById('simDst');
-            if (event.shiftKey) { if (dst) dst.value = d.id; }
-            else                { if (src) src.value = d.id; }
-        });
-    nodeEnter.append('circle').attr('class', 'sim-nc');
-    nodeEnter.append('text').attr('class', 'sim-nl')
-        .attr('font-family', "'JetBrains Mono', monospace").attr('font-weight', '700')
-        .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle').attr('pointer-events', 'none');
-    nodeEnter.append('text').attr('class', 'sim-ns')
-        .attr('font-family', "'JetBrains Mono', monospace").attr('font-size', '9px')
-        .attr('text-anchor', 'middle').attr('fill', '#8C959F').attr('pointer-events', 'none');
-
-    const nodeMerge = nodeEnter.merge(nodeSel);
-    nodeMerge.each(function(d) {
-        const isGw = d.id === 1;
-        const hl   = highlightPath && highlightPath.includes(d.id);
-        const x = px(d.mx), y = py(d.my);
-        const r = isGw ? 22 : 17;
-        d3.select(this).attr('transform', `translate(${x},${y})`);
-        d3.select(this).select('circle.sim-nc')
-            .attr('r', r)
-            .attr('fill', d.failed ? '#F6F8FA' : (hl ? '#1F2328' : (isGw ? '#1F2328' : '#FFFFFF')))
-            .attr('stroke', d.failed ? '#D0D7DE' : (hl ? sfColor(networkSF) : (isGw ? '#1F2328' : '#D0D7DE')))
-            .attr('stroke-width', hl ? 3 : 2)
-            .attr('opacity', d.failed ? 0.35 : 1);
-        d3.select(this).select('text.sim-nl')
-            .attr('font-size', isGw ? '12px' : '11px')
-            .attr('fill', d.failed ? '#8C959F' : (hl || isGw ? '#FFFFFF' : '#1F2328'))
-            .attr('opacity', d.failed ? 0.4 : 1)
-            .text(`N${d.id}`);
-        const sub = d.failed ? 'failed' : (isGw ? 'gateway' : '');
-        d3.select(this).select('text.sim-ns')
-            .attr('dy', r + 12).attr('opacity', d.failed ? 0.4 : 1).text(sub);
-    });
-    nodeSel.exit().remove();
-}
-
-// ── Results table ─────────────────────────────────────────────────────────────
-function _simShowResults() {
-    if (!simState) return;
-    const { nodes, active, links, routes, networkSF } = simState;
-
-    const r1 = routes[1];
-    let reachable = 0;
-    if (r1) active.forEach(n => { if (n.id !== 1 && isFinite(r1.dist[n.id])) reachable++; });
-    const maxRange = links.length > 0 ? Math.max(...links.map(l => l.distM)) : 0;
-    const avgSF    = links.length > 0
-        ? Math.round(links.reduce((s, l) => s + l.sf, 0) / links.length * 10) / 10
-        : '—';
-
-    const el = document.getElementById('simResults');
-    if (!el) return;
-
-    let html = `<div class="sim-stats-row">
-        <span class="sim-stat"><span class="sim-stat-label">network_sf</span><span class="sim-stat-val" style="color:${sfColor(networkSF)}">SF${networkSF} · ${SIM_SF_AIRTIME[networkSF]}ms/hop</span></span>
-        <span class="sim-stat"><span class="sim-stat-label">reachable</span><span class="sim-stat-val">${reachable}/${active.length - 1} nodes</span></span>
-        <span class="sim-stat"><span class="sim-stat-label">links</span><span class="sim-stat-val">${links.length}</span></span>
-        <span class="sim-stat"><span class="sim-stat-label">max_range</span><span class="sim-stat-val">${maxRange}m</span></span>
-        <span class="sim-stat"><span class="sim-stat-label">avg_sf</span><span class="sim-stat-val">${avgSF}</span></span>
-    </div>`;
-
-    if (r1 && active.length > 1) {
-        html += `<div class="sim-table-wrap"><table class="sim-table">
-        <thead><tr>
-            <th>dst</th><th>path</th><th>hops</th>
-            <th>mesh_airtime</th><th>flood_SF${networkSF}</th><th>direct_SF12</th><th>saving_vs_direct</th>
-        </tr></thead><tbody>`;
-
-        active.filter(n => n.id !== 1).forEach(n => {
-            const path = r1.getPath(n.id);
-            const cost = r1.dist[n.id];
-            if (!path) {
-                html += `<tr><td>N${n.id}</td><td colspan="6" style="color:var(--err)">unreachable</td></tr>`;
-                return;
-            }
-            const hops = path.length - 1;
-            const floodCost = hops * SIM_SF_AIRTIME[networkSF];
-
-            // Direct SF12 — check if link exists at all
-            const dl = links.find(l => (l.src===1&&l.dst===n.id)||(l.src===n.id&&l.dst===1));
-            const directCost = dl ? SIM_SF_AIRTIME[12] : null;
-
-            const saving = directCost !== null
-                ? Math.round((1 - cost / directCost) * 100)
-                : null;
-            const savingStr = saving !== null
-                ? `<span style="color:${saving >= 0 ? 'var(--ok)' : 'var(--err)'}">${saving >= 0 ? '+' : ''}${saving}%</span>`
-                : '—';
-
-            html += `<tr>
-                <td><b>N${n.id}</b></td>
-                <td class="sim-td-path">${path.map(id => `N${id}`).join('→')}</td>
-                <td>${hops}</td>
-                <td style="color:${sfColor(networkSF)}">${isFinite(cost) ? cost + 'ms' : '—'}</td>
-                <td style="color:var(--text-muted)">${floodCost}ms</td>
-                <td style="color:var(--text-muted)">${directCost ? directCost + 'ms' : '—'}</td>
-                <td>${savingStr}</td>
-            </tr>`;
-        });
-        html += '</tbody></table></div>';
-    }
-    el.innerHTML = html;
-}
-
-// ── Packet simulation ─────────────────────────────────────────────────────────
-function simSendPacket() {
-    if (!simState) { simGenerate(); return; }
-    const src  = parseInt(document.getElementById('simSrc').value);
-    const dst  = parseInt(document.getElementById('simDst').value);
-    const mode = document.getElementById('simMode').value;
-    const { routes, links, networkSF, intPct } = simState;
-    const resultEl = document.getElementById('simPacketResult');
-
-    if (src === dst) { resultEl.textContent = 'src = dst'; return; }
-
-    function hopAirtime(a, b, forceSF) {
-        const link = links.find(l => (l.src===a&&l.dst===b)||(l.src===b&&l.dst===a));
-        const sf   = forceSF || (link ? link.sf : networkSF);
-        const base = SIM_SF_AIRTIME[sf] || SIM_SF_AIRTIME[networkSF];
-        // E[retransmits] = 1/(1-p) with interference probability p
-        return intPct > 0 ? Math.round(base / (1 - intPct)) : base;
-    }
-
-    function pathSummary(path, label, forceSF) {
-        if (!path) return `<span style="color:var(--err)">${label}: unreachable</span>`;
-        let total = 0;
-        for (let i = 0; i < path.length - 1; i++) total += hopAirtime(path[i], path[i+1], forceSF);
-        const hops = path.length - 1;
-        return `<b>${label}</b>: ${path.map(id=>`N${id}`).join('→')} · ${hops}hop · <b>${total}ms</b>`;
-    }
-
-    const r = routes[src];
-    const routedPath = r ? r.getPath(dst) : null;
-    const dl = links.find(l => (l.src===src&&l.dst===dst)||(l.src===dst&&l.dst===src));
-
-    if (mode === 'routed') {
-        if (!routedPath) { resultEl.innerHTML = `<span style="color:var(--err)">no route N${src}→N${dst}</span>`; return; }
-        _simDraw(routedPath);
-        resultEl.innerHTML = pathSummary(routedPath, 'routed_mesh', null)
-            + (intPct > 0 ? ` <span style="color:var(--warn)">(+${Math.round(intPct*100)}% interference)</span>` : '');
-
-    } else if (mode === 'direct') {
-        if (!dl) { resultEl.innerHTML = `<span style="color:var(--err)">N${src}↔N${dst} out of range</span>`; return; }
-        _simDraw([src, dst]);
-        resultEl.innerHTML = pathSummary([src, dst], 'direct_SF12', 12);
-
-    } else if (mode === 'flood') {
-        if (!routedPath) { resultEl.innerHTML = `<span style="color:var(--err)">unreachable</span>`; return; }
-        _simDraw(routedPath);
-        let total = 0;
-        for (let i = 0; i < routedPath.length - 1; i++) total += hopAirtime(routedPath[i], routedPath[i+1], networkSF);
-        resultEl.innerHTML = pathSummary(routedPath, `flood_SF${networkSF}`, networkSF);
-
-    } else { // compare_all
-        const lines = [];
-        if (routedPath) lines.push(pathSummary(routedPath, 'routed_mesh', null));
-        else lines.push('<span style="color:var(--err)">routed_mesh: unreachable</span>');
-        if (dl) lines.push(pathSummary([src, dst], 'direct_SF12', 12));
-        else lines.push('<span style="color:var(--text-muted)">direct_SF12: out of range</span>');
-        if (routedPath) lines.push(pathSummary(routedPath, `flood_SF${networkSF}`, networkSF));
-        _simDraw(routedPath);
-        resultEl.innerHTML = lines.join('<br>');
-    }
-}
-
-// ── Init SVG ──────────────────────────────────────────────────────────────────
-function simInit() {
-    const svgEl = document.getElementById('simSvg');
-    if (!svgEl) return;
-    const svg = d3.select('#simSvg');
-    const w = svgEl.clientWidth || 800, h = svgEl.clientHeight || 480;
-    svg.attr('width', w).attr('height', h);
-
-    const defs = svg.append('defs');
-    const pat  = defs.append('pattern').attr('id', 'sim-grid').attr('width', 24).attr('height', 24)
-        .attr('patternUnits', 'userSpaceOnUse');
-    pat.append('circle').attr('cx', 2).attr('cy', 2).attr('r', 1).attr('fill', '#D0D7DE');
-    svg.append('rect').attr('width', '100%').attr('height', '100%').attr('fill', 'url(#sim-grid)');
-
-    simSvgRoot = svg.append('g');
-    simSvgRoot.append('g').attr('class', 'sim-links');
-    simSvgRoot.append('g').attr('class', 'sim-nodes');
-}
-
-// =============================================
 // INITIALIZATION
-// =============================================
+
 document.addEventListener('DOMContentLoaded', () => {
     meshInit();
-    simInit();
     _refreshDriveStatus('nrf');
     _refreshDriveStatus('esp32');
 
     window.addEventListener('resize', () => {
-        if (loraGraphData.length > 0) drawLoraRssiChart();
         meshResize();
-        if (currentTab === 'sim' && simState) _simDraw(null);
     });
 
     // Reconnect when tab becomes visible again (browser may have dropped BLE in background)
