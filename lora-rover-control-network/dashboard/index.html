@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>lora_mesh_dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app-container">
+
+    <!-- ── top bar ───────────────────────────────────────────────────────────── -->
+    <header class="glass-bar">
+        <div class="brand">
+            <span class="logo-icon">COMP4531</span>
+            <span class="brand-sep">/</span>
+            <span class="brand-name">lora_mesh_dashboard</span>
+        </div>
+        <nav class="segmented-control">
+            <button type="button" class="nav-btn active" onclick="setTab('home')">connect</button>
+            <button type="button" class="nav-btn" onclick="setTab('mesh')">mesh</button>
+            <button type="button" class="nav-btn" onclick="setTab('serial')">serial</button>
+            <button type="button" class="nav-btn" onclick="setTab('control')">control</button>
+        </nav>
+    </header>
+
+    <!-- ── connect ───────────────────────────────────────────────────────────── -->
+    <section id="view-home" class="view-section active" style="justify-content:center;">
+        <div class="card center-card">
+
+            <h1 class="card-title">connection_setup</h1>
+            <p class="card-sub">pair with your nRF52840 gateway over BLE</p>
+
+            <div class="field">
+                <label>group_id</label>
+                <input type="number" id="gid" value="13" min="1" max="30" placeholder="1–30"
+                       onkeydown="if(event.key==='Enter')event.preventDefault()">
+            </div>
+
+            <div class="action-row">
+                <button type="button" id="conBtn" class="btn-primary" onclick="connect()">connect</button>
+                <button type="button" id="disBtn" class="btn-danger" onclick="disconnect()" disabled>disconnect</button>
+            </div>
+
+            <div class="status-line">
+                <div id="statusDot" class="dot"></div>
+                <span id="connStatus">disconnected</span>
+            </div>
+
+            <hr class="md-divider" data-label="flash_firmware">
+
+            <div class="flash-section">
+                <div class="flash-node-row">
+                    <span class="flash-node-label">node_id</span>
+                    <div class="variant-ctrl" id="nodeIdCtrl">
+                        <button type="button" class="var-btn active" onclick="setFlashNodeId(1,this)">1</button>
+                        <button type="button" class="var-btn" onclick="setFlashNodeId(2,this)">2</button>
+                        <button type="button" class="var-btn" onclick="setFlashNodeId(3,this)">3</button>
+                        <button type="button" class="var-btn" onclick="setFlashNodeId(4,this)">4</button>
+                        <button type="button" class="var-btn" onclick="setFlashNodeId(5,this)">5</button>
+                        <button type="button" class="var-btn" onclick="setFlashNodeId(6,this)">6</button>
+                        <button type="button" class="var-btn" onclick="setFlashNodeId(7,this)">7</button>
+                    </div>
+                </div>
+                <div class="flash-variant-row">
+                    <span class="flash-node-label">board</span>
+                    <div class="variant-ctrl" id="boardCtrl">
+                        <button type="button" id="boardBtnNrf" class="var-btn active" onclick="setFlashBoard('nrf',this)">nrf52840</button>
+                        <button type="button" id="boardBtnEsp32" class="var-btn" onclick="setFlashBoard('esp32',this)">esp32_s3</button>
+                    </div>
+                </div>
+                <div class="flash-variant-row">
+                    <span class="flash-node-label">role</span>
+                    <div class="variant-ctrl" id="roleCtrl">
+                    </div>
+                </div>
+                <p class="flash-hint" id="flashRoleHint" style="margin-bottom:8px;">// BLE gateway controller, recommended default for nRF52840</p>
+
+                <div class="action-row" style="margin-bottom:8px;">
+                    <button type="button" class="btn-flash" id="btnFlashSelected" onclick="flashSelectedDevice()">
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style="margin-right:5px">
+                            <path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
+                        </svg>
+                        <span id="btnFlashSelectedLabel">flash nrf52840</span>
+                    </button>
+                </div>
+                <div class="flash-drives">
+                    <div class="flash-drive-row">
+                        <span class="flash-drive-label">nrf_drive:</span>
+                        <span class="flash-drive-name" id="driveName-nrf">–</span>
+                        <button type="button" class="btn-forget" id="forgetBtn-nrf" onclick="forgetDrive('nrf')" style="display:none">✕</button>
+                    </div>
+                    <div class="flash-drive-row">
+                        <span class="flash-drive-label">esp32_drive:</span>
+                        <span class="flash-drive-name" id="driveName-esp32">–</span>
+                        <button type="button" class="btn-forget" id="forgetBtn-esp32" onclick="forgetDrive('esp32')" style="display:none">✕</button>
+                    </div>
+                </div>
+                <p class="flash-hint">// first flash: pick CIRCUITPY drive once — auto after</p>
+            </div>
+
+            <hr class="md-divider" data-label="monitor" style="margin-top:16px;">
+            <div id="monitorBox" class="monitor-box"></div>
+        </div>
+    </section>
+
+    <!-- ── serial ───────────────────────────────────────────────────────────── -->
+    <section id="view-serial" class="view-section">
+        <div class="serial-shell">
+            <!-- top bar -->
+            <div class="serial-topbar">
+                <span class="card-header-title">esp32_serial_chat</span>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <span id="serialTabBadge" class="badge">disconnected</span>
+                    <button type="button" id="serialTabConnBtn" class="btn-secondary small" onclick="serialTabToggle()">connect_usb</button>
+                </div>
+            </div>
+            <div class="serial-body">
+                <!-- left: conversation list -->
+                <aside class="serial-conv-sidebar resizable-x">
+                    <div class="serial-conv-header">conversations</div>
+                    <div id="serialConvList">
+                        <div class="serial-conv-item active" data-convid="0" onclick="serialSelectConv(0)">
+                            <span class="conv-name">broadcast</span>
+                            <span class="conv-badge" id="convBadge-0"></span>
+                        </div>
+                    </div>
+                </aside>
+                <!-- right: chat + terminal -->
+                <div class="serial-chat-right">
+                    <div class="serial-chat-titlebar">
+                        <span id="serialChatTitle">broadcast</span>
+                    </div>
+                    <div id="serialChatWrap" class="serial-chat-wrap">
+                        <!-- per-conversation chat areas injected here -->
+                        <div id="serialChat-0" class="chat-area serial-chat-pane active-pane">
+                            <div class="chat-placeholder">// connect ESP32 via USB</div>
+                        </div>
+                    </div>
+                    <div class="chat-input-area">
+                        <input type="text" id="serialMsgInput" placeholder="message…"
+                               onkeydown="if(event.key==='Enter') serialTabSend()">
+                        <button type="button" class="btn-send" onclick="serialTabSend()">send</button>
+                    </div>
+                    <hr class="md-divider" data-label="raw_serial" style="margin:6px 0 4px;">
+                    <div id="serialRawLog" class="monitor-box monitor-box-light resizable-y" style="height:150px;"></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── mesh ──────────────────────────────────────────────────────────────── -->
+    <section id="view-mesh" class="view-section">
+        <aside class="glass-sidebar">
+            <h2 class="sidebar-title">mesh_network</h2>
+            <p class="sidebar-sub">SF7 · frozen · distance-vector routing</p>
+
+            <table class="stats-table" style="margin-bottom:16px;">
+                <tr><td>my_node</td><td id="meshMyNodeId">—</td></tr>
+                <tr><td>nodes_seen</td><td id="meshNodeCount">0</td></tr>
+                <tr><td>msg_count</td><td id="meshMsgCount">0</td></tr>
+            </table>
+
+            <hr class="md-divider" data-label="send" style="margin-bottom:12px;">
+
+            <div class="mesh-compose" style="margin-bottom:16px;">
+                <select id="meshDstSelect">
+                    <option value="0">broadcast</option>
+                </select>
+                <input type="text" id="meshMsgInput" placeholder="message…"
+                       onkeydown="if(event.key==='Enter') sendMesh()">
+                <button type="button" class="btn-primary small" onclick="sendMesh()">↑</button>
+            </div>
+            <div class="mesh-send-row" style="margin-bottom:16px;">
+                <button type="button" class="btn-secondary small" onclick="sendEndpointDebug('ON')">debug_on</button>
+                <button type="button" class="btn-secondary small" onclick="sendEndpointDebug('STATUS')">debug_status</button>
+                <button type="button" class="btn-secondary small" onclick="sendEndpointDebug('OFF')">debug_off</button>
+            </div>
+            <div class="mesh-send-row" style="margin-bottom:16px;align-items:center;gap:6px;">
+                <button type="button" id="topoToggleBtn" class="btn-primary small"
+                        onclick="toggleTopoReporting()" style="background:var(--ok);">topo: on</button>
+                <input type="number" id="topoIntervalInput" placeholder="interval (s)"
+                       style="width:70px;font-size:11px;" min="0" value="0"
+                       onkeydown="if(event.key==='Enter') setTopoInterval()">
+                <button type="button" class="btn-secondary small" onclick="setTopoInterval()">set</button>
+            </div>
+            <div class="mesh-send-row" style="margin-bottom:16px;align-items:center;gap:6px;">
+                <span style="font-size:10px;color:var(--text-dim);">route:</span>
+                <select id="routeModeSelect" onchange="setRouteMode(this.value)" style="font-size:11px;width:92px;">
+                    <option value="reliable" selected>reliable</option>
+                    <option value="fastest">fastest</option>
+                </select>
+            </div>
+            <div class="mesh-send-row" style="margin-bottom:16px;align-items:center;gap:6px;">
+                <span style="font-size:10px;color:var(--text-dim);">SF:</span>
+                <span id="meshSfDisplay" style="font-weight:700;font-size:12px;">7</span>
+                <select id="sfSelect" onchange="setSfManual(this.value)" style="font-size:11px;width:60px;" disabled>
+                    <option value="7" selected>SF7</option>
+                </select>
+                <span style="font-size:10px;color:var(--text-dim);margin-left:4px;">mode:</span>
+                <button type="button" class="btn-secondary small" onclick="_sendTopoCmd('MODE:QUIET')">quiet</button>
+                <button type="button" class="btn-secondary small" onclick="_sendTopoCmd('MODE:NORMAL')">normal</button>
+                <button type="button" class="btn-secondary small" onclick="_sendTopoCmd('MODE:ACTIVE')">active</button>
+            </div>
+
+            <div class="mesh-section-label">discovered_nodes</div>
+            <div id="meshNodeList" style="margin-bottom:16px; flex:1; min-height:0; overflow-y:auto;"></div>
+
+            <hr class="md-divider" data-label="esp32_serial" style="margin-bottom:12px;">
+
+            <button type="button" class="btn-secondary small" id="serialBtn" onclick="serialTabToggle()" style="margin-bottom:8px;">connect_usb</button>
+            <div class="mesh-send-row" id="serialSendRow" style="display:none;">
+                <input type="text" id="serialInput" placeholder="send via esp32…"
+                       onkeydown="if(event.key==='Enter') sendSerial()">
+                <button type="button" class="btn-primary small" onclick="sendSerial()">TX</button>
+            </div>
+        </aside>
+
+        <div class="resize-handle resize-handle-x" id="sidebarResizeHandle"></div>
+
+        <main class="mesh-main">
+            <div id="meshViz"><svg id="meshSvg"></svg></div>
+            <div class="resize-handle resize-handle-y" id="logResizeHandle"></div>
+            <div id="meshLog"></div>
+        </main>
+    </section>
+
+    <!-- ── control ──────────────────────────────────────────────────────────── -->
+    <section id="view-control" class="view-section">
+        <div class="control-layout">
+            <!-- left: compass + speed + send -->
+            <aside class="control-sidebar">
+                <h2 class="sidebar-title">rover control</h2>
+                <p class="sidebar-sub" id="controlEndpointLabel">no endpoint selected</p>
+
+                <div class="field" style="margin-bottom:6px;">
+                    <label>target_endpoint</label>
+                    <select id="controlDstSelect">
+                        <option value="0">-- select node --</option>
+                    </select>
+                </div>
+
+                <!-- Compass -->
+                <div class="compass-wrap">
+                    <svg id="compassSvg" viewBox="0 0 160 160" width="160" height="160">
+                        <circle cx="80" cy="80" r="72" fill="none" stroke="var(--border)" stroke-width="1"/>
+                        <circle cx="80" cy="80" r="66" fill="none" stroke="var(--border-sub)" stroke-width="0.5" stroke-dasharray="2,4"/>
+                        <g id="compassTicks"></g>
+                        <line id="compassNeedle" x1="80" y1="80" x2="80" y2="18" stroke="#ff6b35" stroke-width="2.5" stroke-linecap="round"/>
+                        <circle cx="80" cy="80" r="5" fill="var(--accent)"/>
+                        <circle cx="80" cy="80" r="2.5" fill="#fff"/>
+                    </svg>
+                    <div class="compass-readout">
+                        <input type="number" id="bearingInput" value="0" min="0" max="360" step="0.1" onchange="setBearing(this.value)">
+                        <span class="compass-unit">deg</span>
+                    </div>
+                    <div class="compass-presets">
+                        <button type="button" class="preset-btn" onclick="setBearing(0)">N</button>
+                        <button type="button" class="preset-btn" onclick="setBearing(45)">NE</button>
+                        <button type="button" class="preset-btn" onclick="setBearing(90)">E</button>
+                        <button type="button" class="preset-btn" onclick="setBearing(135)">SE</button>
+                        <button type="button" class="preset-btn" onclick="setBearing(180)">S</button>
+                        <button type="button" class="preset-btn" onclick="setBearing(225)">SW</button>
+                        <button type="button" class="preset-btn" onclick="setBearing(270)">W</button>
+                        <button type="button" class="preset-btn" onclick="setBearing(315)">NW</button>
+                    </div>
+                </div>
+
+                <!-- Speed -->
+                <div class="field">
+                    <label>speed: <span id="speedValue">2.5</span></label>
+                    <input type="range" id="speedSlider" min="0.5" max="6.0" step="0.1" value="2.5" oninput="updateSpeedLabel()">
+                </div>
+
+                <!-- Direct command buttons -->
+                <div class="control-actions">
+                    <button type="button" class="btn-secondary small rover-send" onclick="sendRoverCmd('L')">turn L</button>
+                    <button type="button" class="btn-secondary small rover-send" onclick="sendRoverCmd('R')">turn R</button>
+                    <button type="button" class="btn-danger small rover-send" onclick="sendRoverCmd('S')">stop</button>
+                </div>
+                <div class="control-actions" style="margin-top:4px;">
+                    <button type="button" class="btn-primary small rover-send" onclick="sendCurrentBearing()">send bearing</button>
+                    <button type="button" class="btn-primary small rover-send" onclick="sendCurrentSpeed()">send speed</button>
+                </div>
+
+                <!-- FWD / BACK with time or distance -->
+                <div class="field">
+                    <label>move forward</label>
+                    <div style="display:flex;gap:4px;">
+                        <input type="number" id="fwdAmount" value="500" min="1" style="flex:1;">
+                        <select id="fwdUnit" style="width:60px;font-size:11px;">
+                            <option value="time">ms</option>
+                            <option value="dist">px</option>
+                        </select>
+                        <button type="button" class="btn-primary small rover-send" onclick="sendFwd()" style="background:var(--ok)">go</button>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>move backward</label>
+                    <div style="display:flex;gap:4px;">
+                        <input type="number" id="backAmount" value="300" min="1" style="flex:1;">
+                        <select id="backUnit" style="width:60px;font-size:11px;">
+                            <option value="time">ms</option>
+                            <option value="dist">px</option>
+                        </select>
+                        <button type="button" class="btn-primary small rover-send" onclick="sendBack()">go</button>
+                    </div>
+                </div>
+                <div class="control-actions">
+                    <button type="button" class="btn-secondary small" onclick="resetControlSim()">reset sim</button>
+                </div>
+            </aside>
+
+            <!-- right: grid map + waypoints -->
+            <main class="control-main">
+                <div class="control-map-wrap">
+                    <canvas id="controlMap" width="700" height="560"></canvas>
+                    <div class="map-overlay" id="mapOverlay">
+                        <span>select an endpoint to begin</span>
+                    </div>
+                </div>
+                <div class="waypoint-bar">
+                    <button type="button" class="btn-secondary small" id="btnToggleWaypoints" onclick="toggleWaypoints()">waypoints ▾</button>
+                    <button type="button" class="btn-secondary small" onclick="addWaypoint()">+ add</button>
+                    <button type="button" class="btn-secondary small" onclick="clearWaypoints()">clear</button>
+                    <span style="flex:1;"></span>
+                    <button type="button" class="btn-primary small rover-send" id="btnSendNext" onclick="sendNextWaypoint()">send next</button>
+                    <button type="button" class="btn-primary small rover-send" id="btnSendAll" onclick="sendAllWaypoints()">send all</button>
+                </div>
+                <div id="waypointList" class="waypoint-list"></div>
+                <div id="ackLog" class="ack-log"></div>
+            </main>
+        </div>
+    </section>
+
+</div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="script.js"></script>
+</body>
+</html>

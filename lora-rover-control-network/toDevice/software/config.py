@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: MIT
+
+"""Runtime defaults for the fixed-SF7 H/R/D mesh firmware.
+
+Edit this file per board before deployment, or override values in code.py.
+"""
+
+GROUP_ID = 13
+NODE_ID = 1
+BOARD_PROFILE = "esp32_sx1262"   # esp32_sx1262 | nrf52840_sx1262
+ROLE = "controller"  # controller | relay | endpoint | observer
+ALLOW_EXTERNAL_COMMANDS = ROLE == "controller"
+
+FREQ_BASE_MHZ = 900.0
+FREQ_STEP_MHZ = 1.0
+MESH_FREQ_MHZ = 912.0
+LORA_BW_KHZ = 125.0
+LORA_SF = 7
+LORA_CR = 5
+LORA_TX_POWER = 22
+
+TTL_DEFAULT = 6
+ROUTE_TTL = 5
+HELLO_INTERVAL_S = 10.0
+ROUTE_AD_INTERVAL_S = 30.0
+EXPIRE_INTERVAL_S = 30.0
+NEIGHBOR_EXPIRE_S = 120.0
+ROUTE_EXPIRE_S = 90.0
+
+CACHE_SIZE = 60
+DTN_TTL_S = 30.0
+DTN_RETRY_S = 3.0
+DTN_QUEUE_MAX = 16
+
+ROUTE_SWITCH_MARGIN = 0
+ROUTE_RSSI_MARGIN_DB = 4
+ROUTE_MODE = "reliable"  # reliable | fastest
+ROUTE_RELIABLE_HOP_PENALTY_DB = 3
+ROUTE_RELIABLE_SWITCH_MARGIN_DB = 8
+
+CONTROL_PREFIXES = (
+    "CMD:",
+    "ENDPOINT:",
+    "SERVO:",
+    "CAPS?",
+    "PING",
+)
+
+RELAY_JITTER_MIN_S = 0.05
+RELAY_JITTER_MAX_S = 0.20
+ROUTE_JITTER_MIN_S = 0.02
+ROUTE_JITTER_MAX_S = 0.12
+
+ENDPOINT_ACTUATOR = "pwm_servo"  # MG90S default: none | pwm_servo | bus_servo
+ENDPOINT_ENABLE_PWM_SERVO = True
+ENDPOINT_SERVO_PIN = "D7"  # assumed PWM signal pin; verify with continuity test
+ENDPOINT_SERVO_MIN_ANGLE = 0
+ENDPOINT_SERVO_MAX_ANGLE = 180
+ENDPOINT_SERVO_MIN_US = 500
+ENDPOINT_SERVO_MAX_US = 2500
+ENDPOINT_BUS_SERVO_TX_PIN = "D7"  # used only for real bus servos, not MG90S
+ENDPOINT_BUS_SERVO_RX_PIN = "D6"  # used only for real bus servos, not MG90S
+ENDPOINT_BUS_SERVO_BAUDRATE = 1000000
+ENDPOINT_BUS_SERVO_ID = 1
+ENDPOINT_DEBUG_TARGET_NODE = 1
+ENDPOINT_DEBUG_INTERVAL_S = 10.0
+
+BLE_GROUP_ID = GROUP_ID
+BLE_NAME_PREFIX = "MESH_G"
+BLE_NOTIFY_MAX_LEN = 100
